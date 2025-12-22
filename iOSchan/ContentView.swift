@@ -538,9 +538,6 @@ struct FavoritesView: View {
                                     Text(fav.title)
                                         .font(.headline)
                                         .lineLimit(1)
-                                    Text("/\(fav.boardID)/ • \(fav.threadNo)")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
                                 }
                                 
                                 if fav.unreadCount > 0 {

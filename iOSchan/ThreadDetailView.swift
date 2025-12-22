@@ -536,7 +536,6 @@ struct PostRowView: View {
     @Environment(\.openURL) private var openURL
     @ObservedObject private var settings = AppSettings.shared
     @State private var showRepliesPopover = false
-    @State private var commentWidth: CGFloat = 0
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -663,7 +662,7 @@ struct PostRowView: View {
                     Text(sub)
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(.primary)
-                        .lineLimit(2)
+                        .lineLimit(nil)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -678,13 +677,12 @@ struct PostRowView: View {
 
                 // Comment body
                 if let comment = post.com {
-                    SelectableAttributedTextView(
-                        attributedText: attributedNS(for: comment),
-                        onLinkTap: { url in _ = openURL(url) },
-                        availableWidth: commentWidth > 0 ? commentWidth : nil
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(WidthReader(width: $commentWidth))
+                    Text(attributedComment(comment))
+                        .font(.body)
+                        .textSelection(.enabled)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 if isArchived {
@@ -727,59 +725,6 @@ struct PostRowView: View {
         guard let raw = raw else { return "" }
         let attr = attributedComment(raw)
         return String(attr.characters)
-    }
-
-    private func attributedNS(for comment: String) -> NSAttributedString {
-        // Build an NSAttributedString from the already-cleaned SwiftUI attributed content
-        // 1) Get the cleaned plain string from the SwiftUI AttributedString
-        let swiftAttr = attributedComment(comment)
-        let cleaned = String(swiftAttr.characters)
-
-        // 2) Start with a mutable NSAttributedString of the cleaned text
-        let mutable = NSMutableAttributedString(string: cleaned)
-        let full = cleaned as NSString
-        let fullRange = NSRange(location: 0, length: full.length)
-
-        // 3) Detect and apply links: quote links (>>123) and external URLs
-        let quotePattern = #">>(\d+)"#
-        let urlPattern = #"https?:\/\/[^\s]+"#
-        let quoteRegex = try? NSRegularExpression(pattern: quotePattern, options: [])
-        let urlRegex = try? NSRegularExpression(pattern: urlPattern, options: [])
-
-        if let qrx = quoteRegex {
-            let matches = qrx.matches(in: cleaned, options: [], range: fullRange)
-            for m in matches where m.numberOfRanges >= 2 {
-                let nr = m.range(at: 1)
-                let numStr = full.substring(with: nr)
-                if let url = URL(string: "quote://\(numStr)") {
-                    mutable.addAttribute(NSAttributedString.Key.link, value: url, range: m.range)
-                }
-            }
-        }
-        if let urx = urlRegex {
-            let matches = urx.matches(in: cleaned, options: [], range: fullRange)
-            for m in matches {
-                let urlStr = full.substring(with: m.range)
-                if let url = URL(string: urlStr) {
-                    mutable.addAttribute(NSAttributedString.Key.link, value: url, range: m.range)
-                }
-            }
-        }
-
-        // 4) Apply greentext color to any line that starts with '>' but not '>>'
-        let lines = cleaned.components(separatedBy: "\n")
-        var location = 0
-        for (i, line) in lines.enumerated() {
-            let lineLen = (line as NSString).length
-            if line.hasPrefix(">") && !line.hasPrefix(">>") {
-                let range = NSRange(location: location, length: lineLen)
-                mutable.addAttribute(NSAttributedString.Key.foregroundColor, value: UIColor.systemGreen, range: range)
-            }
-            location += lineLen
-            if i < lines.count - 1 { location += 1 } // account for newline
-        }
-
-        return mutable
     }
 }
 
@@ -829,13 +774,15 @@ struct ReplyPreviewRow: View {
                     if let sub = post.sub {
                         Text(sub)
                             .font(.caption.bold())
-                            .lineLimit(1)
+                            .lineLimit(nil)
+                            .fixedSize(horizontal: false, vertical: true)
                             .foregroundColor(.primary)
                     }
                     if let com = post.com {
                         Text(attributedComment(com))
                             .font(.caption)
-                            .lineLimit(3)
+                            .lineLimit(nil)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -846,109 +793,6 @@ struct ReplyPreviewRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-}
-
-struct SelectableAttributedTextView: UIViewRepresentable {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    let attributedText: NSAttributedString
-    let onLinkTap: (URL) -> Void
-    let availableWidth: CGFloat?
-
-    func makeCoordinator() -> Coordinator { Coordinator(onLinkTap: onLinkTap) }
-
-    func makeUIView(context: Context) -> UITextView {
-        let tv = UITextView()
-        tv.isEditable = false
-        tv.isSelectable = true
-        tv.isScrollEnabled = false
-        tv.backgroundColor = .clear
-        tv.textContainerInset = .zero
-        tv.textContainer.lineFragmentPadding = 0
-        tv.delegate = context.coordinator
-        tv.dataDetectorTypes = [] // links come from attributedText
-        tv.adjustsFontForContentSizeCategory = false
-        tv.attributedText = attributedText
-        tv.font = scaledFont(for: dynamicTypeSize)
-        tv.textContainer.widthTracksTextView = false
-        tv.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        tv.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        return tv
-    }
-
-    func updateUIView(_ uiView: UITextView, context: Context) {
-        if let w = availableWidth, w > 0 {
-            uiView.textContainer.size = CGSize(width: w, height: .greatestFiniteMagnitude)
-        }
-        uiView.attributedText = attributedText
-        uiView.font = scaledFont(for: dynamicTypeSize)
-    }
-    
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize {
-        let fallback = UIScreen.main.bounds.width * 0.9
-        let targetWidth = max(1, availableWidth ?? proposal.width ?? uiView.bounds.width > 1 ? uiView.bounds.width : fallback)
-        uiView.textContainer.size = CGSize(width: targetWidth, height: .greatestFiniteMagnitude)
-        let size = uiView.sizeThatFits(CGSize(width: targetWidth, height: .greatestFiniteMagnitude))
-        return CGSize(width: targetWidth, height: ceil(size.height))
-    }
-
-    private func uiCategory(for dyn: DynamicTypeSize) -> UIContentSizeCategory {
-        switch dyn {
-        case .xSmall: return .extraSmall
-        case .small: return .small
-        case .medium: return .medium
-        case .large: return .large
-        case .xLarge: return .extraLarge
-        case .xxLarge: return .extraExtraLarge
-        case .xxxLarge: return .extraExtraExtraLarge
-        case .accessibility1: return .accessibilityMedium
-        case .accessibility2: return .accessibilityLarge
-        case .accessibility3: return .accessibilityExtraLarge
-        case .accessibility4: return .accessibilityExtraExtraLarge
-        case .accessibility5: return .accessibilityExtraExtraExtraLarge
-        default: return .medium
-        }
-    }
-
-    private func scaledFont(for dyn: DynamicTypeSize) -> UIFont {
-        let base = UIFont.preferredFont(forTextStyle: .body)
-        let cat = uiCategory(for: dyn)
-        let traits = UITraitCollection(preferredContentSizeCategory: cat)
-        let metrics = UIFontMetrics(forTextStyle: .body)
-        let scaledBase = metrics.scaledFont(for: base, compatibleWith: traits)
-
-        // Apply app-specific scaling
-        let uiScale = AppSettings.shared.uiScale // 0.6, 0.8, 1.0
-        let fine = AppSettings.shared.fontFineTune // small fine-tune (-/+)
-        // Combine scale and fine-tune into a gentle multiplier
-        let multiplier = max(0.5, min(1.5, uiScale * (1.0 + fine * 0.12)))
-
-        let adjustedSize = max(8.0, scaledBase.pointSize * multiplier)
-        return UIFont(descriptor: scaledBase.fontDescriptor, size: adjustedSize)
-    }
-
-    class Coordinator: NSObject, UITextViewDelegate {
-        let onLinkTap: (URL) -> Void
-        init(onLinkTap: @escaping (URL) -> Void) { self.onLinkTap = onLinkTap }
-
-        func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
-            onLinkTap(URL)
-            return false
-        }
-    }
-}
-
-private struct WidthKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-private struct WidthReader: View {
-    @Binding var width: CGFloat
-    var body: some View {
-        GeometryReader { geo in
-            Color.clear.preference(key: WidthKey.self, value: geo.size.width)
-        }
-        .onPreferenceChange(WidthKey.self) { width = $0 }
     }
 }
 
