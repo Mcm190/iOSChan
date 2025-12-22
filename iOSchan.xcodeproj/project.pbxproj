@@ -6,13 +6,37 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		7C6351142EF7DA8B00AB9F9F /* CacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C6351132EF7DA8B00AB9F9F /* CacheManager.swift */; };
+		7C6351162EF7DBD500AB9F9F /* MediaCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C6351152EF7DBD500AB9F9F /* MediaCacheManager.swift */; };
+		7CE638562EF8614900B3C046 /* BoardDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CE638552EF8614900B3C046 /* BoardDirectory.swift */; };
+		7CE638622EF8702300B3C046 /* CookieBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CE638612EF8702300B3C046 /* CookieBridge.swift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		7C5010CE2EF6CBC500072401 /* iOSchan.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iOSchan.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7C6351132EF7DA8B00AB9F9F /* CacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CacheManager.swift; sourceTree = "<group>"; };
+		7C6351152EF7DBD500AB9F9F /* MediaCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaCacheManager.swift; sourceTree = "<group>"; };
+		7CE638552EF8614900B3C046 /* BoardDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardDirectory.swift; sourceTree = "<group>"; };
+		7CE638612EF8702300B3C046 /* CookieBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CookieBridge.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		7C50110A2EF6F5F200072401 /* Exceptions for "iOSchan" folder in "iOSchan" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 7C5010CD2EF6CBC500072401 /* iOSchan */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		7C5010D02EF6CBC500072401 /* iOSchan */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				7C50110A2EF6F5F200072401 /* Exceptions for "iOSchan" folder in "iOSchan" target */,
+			);
 			path = iOSchan;
 			sourceTree = "<group>";
 		};
@@ -34,6 +58,10 @@
 			children = (
 				7C5010D02EF6CBC500072401 /* iOSchan */,
 				7C5010CF2EF6CBC500072401 /* Products */,
+				7C6351132EF7DA8B00AB9F9F /* CacheManager.swift */,
+				7C6351152EF7DBD500AB9F9F /* MediaCacheManager.swift */,
+				7CE638552EF8614900B3C046 /* BoardDirectory.swift */,
+				7CE638612EF8702300B3C046 /* CookieBridge.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -119,6 +147,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7CE638622EF8702300B3C046 /* CookieBridge.swift in Sources */,
+				7CE638562EF8614900B3C046 /* BoardDirectory.swift in Sources */,
+				7C6351162EF7DBD500AB9F9F /* MediaCacheManager.swift in Sources */,
+				7C6351142EF7DA8B00AB9F9F /* CacheManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -251,16 +283,23 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = VQLHV2V68B;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = iOSchan/Info.plist;
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save images to gallery.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen.storyboard;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UIUserInterfaceStyle = Light;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -283,16 +322,23 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = VQLHV2V68B;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = iOSchan/Info.plist;
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save images to gallery.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen.storyboard;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UIUserInterfaceStyle = Light;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
