@@ -66,7 +66,6 @@ struct ImageBrowser: View {
                         }
                     }
 
-                    // Close
                     Button(action: { isPresented = false }) {
                         Image(systemName: "xmark")
                             .font(.headline).foregroundColor(.white)
@@ -76,7 +75,6 @@ struct ImageBrowser: View {
 
                     Spacer()
 
-                    // Save button
                     Button(action: { saveCurrentMedia() }) {
                         Image(systemName: "square.and.arrow.down")
                             .font(.headline).foregroundColor(.white)
@@ -130,7 +128,6 @@ struct ImageBrowser: View {
             do {
                 let (fileURL, _) = try await downloadToTemporaryFile(from: url)
 
-                // Create a dated folder in Documents similar to ThreadDetailView's format.
                 let dateFormatter = DateFormatter()
                 dateFormatter.dateFormat = "ddMMyyyy"
                 let dateString = dateFormatter.string(from: Date())

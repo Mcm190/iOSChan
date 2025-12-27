@@ -5,12 +5,10 @@ struct FullScreenImageView: View {
     let imageURL: URL
     @Environment(\.presentationMode) var presentationMode
     
-    // State to control the Share Sheet
     @State private var showShareSheet = false
     @State private var fileToShare: URL?
     @State private var isDownloading = false
     
-    // Helper to check if it is a video (WebM or MP4)
     var isVideo: Bool {
         let urlString = imageURL.absoluteString.lowercased()
         return urlString.contains(".webm") || urlString.contains(".mp4")
@@ -18,10 +16,8 @@ struct FullScreenImageView: View {
     
     var body: some View {
         ZStack {
-            // 1. Black background
             Color.black.edgesIgnoringSafeArea(.all)
             
-            // 2. Smart Switcher (Video vs Image)
             if isVideo {
                 WebView(url: imageURL)
                     .edgesIgnoringSafeArea(.all)
@@ -29,7 +25,6 @@ struct FullScreenImageView: View {
                 AsyncImage(url: imageURL) { phase in
                     switch phase {
                     case .success(let image):
-                        // FIX: Wrap the loaded image in our Zoomable Helper
                         ZoomableScrollView {
                             image
                                 .resizable()
@@ -49,10 +44,8 @@ struct FullScreenImageView: View {
                 }
             }
             
-            // 3. Buttons (Overlay)
             VStack {
                 HStack {
-                    // Close Button
                     Button(action: { presentationMode.wrappedValue.dismiss() }) {
                         Image(systemName: "xmark")
                             .font(.headline).foregroundColor(.white)
@@ -63,7 +56,6 @@ struct FullScreenImageView: View {
                     
                     Spacer()
                     
-                    // SHARE / SAVE BUTTON
                     if isDownloading {
                         ProgressView()
                             .padding()
@@ -113,8 +105,6 @@ struct FullScreenImageView: View {
     }
 }
 
-// --- NEW HELPER: Zoomable Scroll View ---
-// This wraps the native UIKit ScrollView to allow Pinch & Pan
 struct ZoomableScrollView<Content: View>: UIViewRepresentable {
     private var content: Content
 
@@ -123,7 +113,6 @@ struct ZoomableScrollView<Content: View>: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> UIScrollView {
-        // Set up the native ScrollView
         let scrollView = UIScrollView()
         scrollView.delegate = context.coordinator
         scrollView.maximumZoomScale = 5.0 // Max Zoom (5x)
@@ -133,14 +122,12 @@ struct ZoomableScrollView<Content: View>: UIViewRepresentable {
         scrollView.showsVerticalScrollIndicator = false
         scrollView.backgroundColor = .clear
 
-        // Embed the SwiftUI view inside
         let hostedView = context.coordinator.hostingController.view!
         hostedView.translatesAutoresizingMaskIntoConstraints = true
         hostedView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         hostedView.backgroundColor = .clear
         scrollView.addSubview(hostedView)
 
-        // Handle Double Tap to Reset
         let doubleTapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
         doubleTapGesture.numberOfTapsRequired = 2
         scrollView.addGestureRecognizer(doubleTapGesture)
@@ -149,7 +136,6 @@ struct ZoomableScrollView<Content: View>: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIScrollView, context: Context) {
-        // Update content if needed
         context.coordinator.hostingController.rootView = self.content
         assert(context.coordinator.hostingController.view.superview == uiView)
     }
@@ -158,7 +144,6 @@ struct ZoomableScrollView<Content: View>: UIViewRepresentable {
         return Coordinator(hostingController: UIHostingController(rootView: self.content))
     }
 
-    // The Coordinator handles the events
     class Coordinator: NSObject, UIScrollViewDelegate {
         var hostingController: UIHostingController<Content>
 
@@ -170,15 +155,12 @@ struct ZoomableScrollView<Content: View>: UIViewRepresentable {
             return hostingController.view
         }
         
-        // Double Tap Logic
         @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
             guard let scrollView = gesture.view as? UIScrollView else { return }
             
-            // Toggle between 1x and 2.5x
             if scrollView.zoomScale > 1 {
                 scrollView.setZoomScale(1, animated: true)
             } else {
-                // Zoom in to where the user tapped
                 let point = gesture.location(in: hostingController.view)
                 let scrollSize = scrollView.frame.size
                 let size = CGSize(width: scrollSize.width / 2.5, height: scrollSize.height / 2.5)

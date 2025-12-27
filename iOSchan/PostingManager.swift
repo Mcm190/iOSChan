@@ -2,7 +2,7 @@ import Foundation
 
 struct PostPayload {
     let boardID: String
-    let threadNo: Int? // nil for new thread
+    let threadNo: Int?
     var name: String?
     var subject: String?
     var email: String?
@@ -37,7 +37,6 @@ final class PostingManager {
     func submit(_ payload: PostPayload) async throws {
         guard let token = payload.captchaToken, !token.isEmpty else { throw PostError.missingCaptcha }
 
-        // 4chan posting endpoint (form post)
         let url = URL(string: "https://sys.4chan.org/\(payload.boardID)/post")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -67,9 +66,7 @@ final class PostingManager {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw PostError.invalidResponse }
 
-            // Accept 2xx and 3xx as success; 4chan often redirects on success
             if (200..<400).contains(http.statusCode) {
-                // Optionally parse the HTML for known error messages
                 if let html = String(data: data, encoding: .utf8) {
                     if html.localizedCaseInsensitiveContains("error") || html.localizedCaseInsensitiveContains("ban") {
                         throw PostError.serverMessage("Server responded with an error. Please verify your post and CAPTCHA.")
@@ -102,23 +99,19 @@ final class PostingManager {
             data.appendString("\r\n")
         }
 
-        // Required fields
         appendField("mode", "regist")
         if let resto = payload.threadNo { appendField("resto", String(resto)) }
         appendField("com", payload.comment)
 
-        // Optional identity/subject/email
         if let name = payload.name, !name.isEmpty { appendField("name", name) }
         if let subject = payload.subject, !subject.isEmpty { appendField("sub", subject) }
         if let email = payload.email, !email.isEmpty { appendField("email", email) }
 
-        // CAPTCHA (hCaptcha)
         appendField("h-captcha-response", token)
         if let cid = payload.captchaId, !cid.isEmpty {
             appendField("captcha_id", cid)
         }
 
-        // File (optional)
         if let imgData = payload.imageData, !imgData.isEmpty {
             let filename = payload.imageFilename ?? "file.jpg"
             let mime = mimeType(for: filename)

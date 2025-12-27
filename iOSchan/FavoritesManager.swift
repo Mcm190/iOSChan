@@ -9,7 +9,6 @@ import Foundation
 import SwiftUI
 import Combine
 
-// 1. The data model for a saved thread
 struct SavedThread: Codable, Identifiable {
     var id: String { "\(boardID)-\(threadNo)" } // Unique ID (e.g. "g-123456")
     let boardID: String
@@ -21,14 +20,12 @@ struct SavedThread: Codable, Identifiable {
     var unreadCount: Int // New replies since last seen, defaults to 0 with Codable
 }
 
-// 2a. The data model for a saved board
 struct SavedBoard: Codable, Identifiable {
     var id: String { board }
     let board: String
     let title: String
 }
 
-// 2. The Manager Class
 class FavoritesManager: ObservableObject {
     static let shared = FavoritesManager() // Singleton
     
@@ -44,7 +41,6 @@ class FavoritesManager: ObservableObject {
         startPolling()
     }
     
-    // Save a thread
     func add(boardID: String, threadNo: Int, title: String, tim: Int?) {
         let newFavorite = SavedThread(boardID: boardID, threadNo: threadNo, title: title, tim: tim, isDead: nil, lastReplyCount: nil, unreadCount: 0)
         if !favorites.contains(where: { $0.id == newFavorite.id }) {
@@ -54,7 +50,6 @@ class FavoritesManager: ObservableObject {
         }
     }
 
-    // Save / remove a board from favorites
     func addBoard(_ board: Board) {
         let sb = SavedBoard(board: board.board, title: board.title)
         if !savedBoards.contains(where: { $0.id == sb.id }) {
@@ -72,18 +67,15 @@ class FavoritesManager: ObservableObject {
         savedBoards.contains { $0.board == boardCode }
     }
     
-    // Remove a thread
     func remove(boardID: String, threadNo: Int) {
         favorites.removeAll { $0.boardID == boardID && $0.threadNo == threadNo }
         save()
     }
     
-    // Check if it's already favorited
     func isFavorite(boardID: String, threadNo: Int) -> Bool {
         return favorites.contains { $0.boardID == boardID && $0.threadNo == threadNo }
     }
     
-    // Internal save/load logic
     private func save() {
         if let encoded = try? JSONEncoder().encode(favorites) {
             UserDefaults.standard.set(encoded, forKey: "savedThreads")
@@ -112,7 +104,6 @@ class FavoritesManager: ObservableObject {
         pollTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             self?.checkForUpdates()
         }
-        // Bootstrap counts on launch without generating unread
         bootstrapLastCounts()
     }
 
@@ -123,14 +114,15 @@ class FavoritesManager: ObservableObject {
                 switch result {
                 case .success(let posts):
                     let count = max(0, posts.count - 1)
-                    if let idx = self.favorites.firstIndex(where: { $0.boardID == fav.boardID && $0.threadNo == fav.threadNo }) {
-                        if self.favorites[idx].lastReplyCount == nil {
-                            self.favorites[idx].lastReplyCount = count
-                            self.save()
+                    DispatchQueue.main.async {
+                        if let idx = self.favorites.firstIndex(where: { $0.boardID == fav.boardID && $0.threadNo == fav.threadNo }) {
+                            if self.favorites[idx].lastReplyCount == nil {
+                                self.favorites[idx].lastReplyCount = count
+                                self.save()
+                            }
                         }
                     }
                 case .failure:
-                    // Ignore bootstrap failures
                     break
                 }
             }
@@ -144,22 +136,24 @@ class FavoritesManager: ObservableObject {
                 switch result {
                 case .success(let posts):
                     let count = max(0, posts.count - 1)
-                    if let idx = self.favorites.firstIndex(where: { $0.boardID == fav.boardID && $0.threadNo == fav.threadNo }) {
-                        let last = self.favorites[idx].lastReplyCount ?? count
-                        if count > last {
-                            self.favorites[idx].unreadCount += (count - last)
+                    DispatchQueue.main.async {
+                        if let idx = self.favorites.firstIndex(where: { $0.boardID == fav.boardID && $0.threadNo == fav.threadNo }) {
+                            let last = self.favorites[idx].lastReplyCount ?? count
+                            if count > last {
+                                self.favorites[idx].unreadCount += (count - last)
+                            }
+                            self.favorites[idx].lastReplyCount = count
+                            self.save()
+                            HistoryManager.shared.updateCounts(boardID: fav.boardID, threadNo: fav.threadNo, replyCount: count)
                         }
-                        self.favorites[idx].lastReplyCount = count
-                        self.save()
-                        // Also update history unread counts if this thread exists in history
-                        HistoryManager.shared.updateCounts(boardID: fav.boardID, threadNo: fav.threadNo, replyCount: count)
                     }
                 case .failure(let error):
-                    // Only mark dead on explicit 404 from the API; ignore transient/network errors
                     if let apiErr = error as? APIError {
                         if case .notFound = apiErr {
-                            self.markDead(boardID: fav.boardID, threadNo: fav.threadNo)
-                            HistoryManager.shared.markDead(boardID: fav.boardID, threadNo: fav.threadNo)
+                            DispatchQueue.main.async {
+                                self.markDead(boardID: fav.boardID, threadNo: fav.threadNo)
+                                HistoryManager.shared.markDead(boardID: fav.boardID, threadNo: fav.threadNo)
+                            }
                         }
                     }
                 }

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct PostComposerView: View {
     let boardID: String
-    let threadNo: Int?   // nil = new thread, otherwise reply
+    let threadNo: Int?
     
     @Environment(\.dismiss) private var dismiss
     
@@ -21,10 +21,8 @@ struct PostComposerView: View {
     
     private var postURL: URL {
         if let threadNo {
-            // Reply: open the thread page
             return URL(string: "https://boards.4chan.org/\(boardID)/thread/\(threadNo)")!
         } else {
-            // New thread: open the board page (NOT /post)
             return URL(string: "https://boards.4chan.org/\(boardID)/")!
         }
     }

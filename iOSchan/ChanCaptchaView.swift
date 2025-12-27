@@ -1,8 +1,8 @@
 import SwiftUI
 import WebKit
 
-// 1. GLOBAL SHARED WEBVIEW CONTROLLER
-// This keeps the WebView alive so cookies & Cloudflare clearance are remembered.
+//this is pretty fucked tbh will work on at some point just open in safari to post
+
 class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageHandler, WKUIDelegate {
     static let shared = CaptchaWebViewController()
     static let sharedProcessPool = WKProcessPool()
@@ -12,6 +12,7 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
     private var currentBoardID: String?
     private var manualRefererBypass = Set<String>()
     private var warmedBoards = Set<String>()
+    private var warmedHosts = Set<String>()
     private var pendingCaptchaURL: URL?
     
     override private init() {
@@ -31,20 +32,56 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
         config.allowsInlineMediaPlayback = true
         config.websiteDataStore = .default()
         
-        // JS Watcher to catch the token automatically
         let js = """
         (function() {
-            var interval = setInterval(function() {
-                var tokenInput = document.querySelector("[name='h-captcha-response'], [name='g-recaptcha-response']");
-                var token = tokenInput ? tokenInput.value : null;
-                if (token && token.length > 10) {
-                    window.webkit.messageHandlers.captchaHandler.postMessage(token);
-                    tokenInput.value = ""; // Clear it so we don't trigger twice
-                }
-            }, 500);
+            function postTokenIfAvailable() {
+                try {
+                    var tokenInput = document.querySelector('[name="h-captcha-response"], [name="g-recaptcha-response"]');
+                    var token = tokenInput ? tokenInput.value : null;
+                    if (token && token.length > 10) {
+                        try { window.webkit.messageHandlers.captchaHandler.postMessage(token); } catch(e) {}
+                        return true;
+                    }
+                } catch (e) {}
+                return false;
+            }
+            function hookHCaptcha() {
+                try {
+                    if (window.hcaptcha && typeof window.hcaptcha.on === 'function') {
+                        window.hcaptcha.on('pass', function(token){
+                            try { window.webkit.messageHandlers.captchaHandler.postMessage(token); } catch(e) {}
+                        });
+                        return true;
+                    }
+                } catch (e) {}
+                return false;
+            }
+            function hookFormSubmit() {
+                try {
+                    var form = document.querySelector('form');
+                    if (!form) return false;
+                    form.addEventListener('submit', function(ev){
+                        try {
+                            var tokenInput = document.querySelector('[name="h-captcha-response"], [name="g-recaptcha-response"]');
+                            var token = tokenInput ? tokenInput.value : null;
+                            if (token && token.length > 10) {
+                                try { window.webkit.messageHandlers.captchaHandler.postMessage(token); } catch(e) {}
+                            }
+                        } catch(e) {}
+                    }, true);
+                    return true;
+                } catch (e) {}
+                return false;
+            }
+            var attempts = 0;
+            var iv = setInterval(function(){
+                attempts++;
+                var ok = postTokenIfAvailable() || hookHCaptcha() || hookFormSubmit();
+                if (ok || attempts > 120) { clearInterval(iv); }
+            }, 250);
         })();
         """
-        let script = WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+        let script = WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: false)
         config.userContentController.addUserScript(script)
         config.userContentController.add(self, name: "captchaHandler")
         
@@ -56,12 +93,10 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
         webView.backgroundColor = .systemBackground
     }
     
-    // Called when the SwiftUI view appears
     func load(boardID: String, threadNo: Int?, onToken: @escaping (String, String?) -> Void) {
         self.currentBoardID = boardID
         self.currentSuccessCallback = onToken
         
-        // Construct the URL
         var components = URLComponents(string: "https://sys.4chan.org/captcha")!
         var queryItems = [URLQueryItem(name: "board", value: boardID)]
         if let thread = threadNo {
@@ -72,7 +107,15 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
         
         guard let url = components.url else { return }
         
-        // Warm-up Cloudflare clearance on the board domain first
+        if !warmedHosts.contains("sys.4chan.org") {
+            pendingCaptchaURL = url
+            if let warmSys = URL(string: "https://sys.4chan.org/") {
+                let warmReq = URLRequest(url: warmSys)
+                webView.load(warmReq)
+                return
+            }
+        }
+        
         if !warmedBoards.contains(boardID) {
             pendingCaptchaURL = url
             if let warmURL = URL(string: "https://boards.4chan.org/\(boardID)/") {
@@ -82,7 +125,6 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
             }
         }
         
-        // Only reload if we aren't already on this exact page (prevents refreshing the puzzle if you rotate screen)
         if webView.url?.absoluteString != url.absoluteString {
             var request = URLRequest(url: url)
             // Referer is critical for 4chan/Cloudflare trust
@@ -91,29 +133,32 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
         }
     }
     
-    // WKScriptMessageHandler: Captures the token
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         if let token = message.body as? String {
             print("✅ Token captured!")
+            print("[Captcha] token length=\(token.count)")
             DispatchQueue.main.async {
                 self.currentSuccessCallback?(token, nil)
             }
         }
     }
     
-    // Cookie Syncing
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         // If we just finished loading the board page, proceed to captcha
         if let host = webView.url?.host, let board = currentBoardID {
             if host == "boards.4chan.org" {
                 warmedBoards.insert(board)
-                if let pending = pendingCaptchaURL {
-                    pendingCaptchaURL = nil
-                    var req = URLRequest(url: pending)
-                    req.setValue("https://boards.4chan.org/\(board)/", forHTTPHeaderField: "Referer")
-                    webView.load(req)
-                    return
-                }
+                warmedHosts.insert(host)
+            }
+            if host == "sys.4chan.org" {
+                warmedHosts.insert(host)
+            }
+            if let pending = pendingCaptchaURL, warmedHosts.contains("sys.4chan.org") && warmedBoards.contains(board) {
+                pendingCaptchaURL = nil
+                var req = URLRequest(url: pending)
+                req.setValue("https://boards.4chan.org/\(board)/", forHTTPHeaderField: "Referer")
+                webView.load(req)
+                return
             }
         }
         webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
@@ -123,7 +168,6 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
     }
 }
 
-// MARK: - WKUIDelegate (handle target=_blank, JS alerts)
 extension CaptchaWebViewController {
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         // Open new windows in the same webView
@@ -150,7 +194,6 @@ extension CaptchaWebViewController {
         completionHandler(defaultText)
     }
 
-    // MARK: - Extra logging to diagnose loops
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if let url = navigationAction.request.url {
             let urlString = url.absoluteString
@@ -159,7 +202,7 @@ extension CaptchaWebViewController {
             let path = url.path
             let method = navigationAction.request.httpMethod ?? "GET"
             // Only enforce Referer for the actual captcha endpoint (GET). Do not interfere with CF challenges.
-            let isCaptcha = (host == "sys.4chan.org" && path.contains("/captcha"))
+            let isCaptcha = (host == "sys.4chan.org" && (path.contains("/captcha") || path.contains("/hcaptcha")))
             let hasReferer = navigationAction.request.value(forHTTPHeaderField: "Referer") != nil
             if isCaptcha && method == "GET" && !hasReferer && manualRefererBypass.insert(urlString).inserted {
                 decisionHandler(.cancel)
@@ -195,20 +238,16 @@ extension CaptchaWebViewController {
     }
 }
 
-// 2. SWIFTUI WRAPPER
-// This is just a thin window into the shared controller
 struct ChanCaptchaView: UIViewRepresentable {
     let boardID: String
     let threadNo: Int?
     let onToken: (String, String?) -> Void
 
     func makeUIView(context: Context) -> WKWebView {
-        // Return the existing shared WebView instead of making a new one
         return CaptchaWebViewController.shared.webView
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {
-        // Tell the controller to load the correct page
         CaptchaWebViewController.shared.load(boardID: boardID, threadNo: threadNo, onToken: onToken)
     }
 }

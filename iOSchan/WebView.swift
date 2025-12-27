@@ -29,7 +29,6 @@ struct WebView: UIViewRepresentable {
             </html>
             """
         } else {
-            // Determine the correct MIME type for video
             let mimeType = ext == "mp4" ? "video/mp4" : "video/webm"
             html = """
             <html>

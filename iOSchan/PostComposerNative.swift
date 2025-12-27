@@ -2,7 +2,6 @@ import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
 
-// Simple storage to hold the captcha ID if 4chan provides one
 final class CaptchaStorage {
     static let shared = CaptchaStorage()
     private init() {}
@@ -11,7 +10,7 @@ final class CaptchaStorage {
 
 struct PostComposerNative: View {
     let boardID: String
-    let threadNo: Int? // nil -> new thread
+    let threadNo: Int?
 
     init(boardID: String, threadNo: Int?, initialComment: String? = nil) {
         self.boardID = boardID
@@ -21,22 +20,20 @@ struct PostComposerNative: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    // Form Fields
     @State private var name: String = ""
     @State private var subject: String = ""
     @State private var email: String = ""
     @State private var comment: String = ""
 
-    // Attachment
+
     @State private var selectedItem: PhotosPickerItem? = nil
     @State private var selectedData: Data? = nil
     @State private var selectedFilename: String? = nil
 
-    // Captcha State
     @State private var captchaToken: String? = nil
     @State private var showingCaptcha = false
+    @State private var isSolvingCaptcha = false
     
-    // Submission State
     @State private var isSubmitting = false
     @State private var errorMessage: String? = nil
     @State private var showErrorAlert = false
@@ -53,7 +50,6 @@ struct PostComposerNative: View {
     var body: some View {
         NavigationView {
             Form {
-                // Header Information
                 Section(header: Text("Posting to /\(boardID)/")) {
                     if let threadNo {
                         Text("Replying to No. \(threadNo)")
@@ -64,7 +60,6 @@ struct PostComposerNative: View {
                     }
                 }
 
-                // Identity
                 Section(header: Text("Identity (optional)")) {
                     TextField("Name", text: $name)
                         .textInputAutocapitalization(.never)
@@ -75,7 +70,6 @@ struct PostComposerNative: View {
                         .keyboardType(.emailAddress)
                 }
 
-                // Subject (Only show for new threads)
                 if threadNo == nil {
                     Section(header: Text("Subject (optional)")) {
                         TextField("Subject", text: $subject)
@@ -83,13 +77,11 @@ struct PostComposerNative: View {
                     }
                 }
 
-                // Comment Body
                 Section(header: Text("Comment")) {
                     TextEditor(text: $comment)
                         .frame(minHeight: 180)
                 }
 
-                // Media Attachment
                 Section(header: Text("Attachment")) {
                     PhotosPicker(selection: $selectedItem, matching: .any(of: [.images, .videos])) {
                         HStack {
@@ -110,23 +102,22 @@ struct PostComposerNative: View {
                     }
                 }
 
-                // Captcha Section
                 Section(header: Text("CAPTCHA"), footer: captchaStatusFooter) {
                     Button(action: {
-                        // Reset error and open the captcha sheet immediately
-                        // The ChanCaptchaView handles the loading logic now.
                         errorMessage = nil
-                        showingCaptcha = true
+                        Task { await solveCaptchaPreferNative() }
                     }) {
-                        if captchaToken == nil {
+                        if isSolvingCaptcha {
+                            HStack { ProgressView(); Text("Solving...") }
+                        } else if captchaToken == nil {
                             Text("Solve hCaptcha")
                         } else {
                             Text("Re-solve hCaptcha")
                         }
                     }
+                    .disabled(isSolvingCaptcha)
                 }
 
-                // Submit Button
                 Section {
                     Button(action: submit) {
                         if isSubmitting {
@@ -154,9 +145,8 @@ struct PostComposerNative: View {
                     .accessibilityLabel("Open in Safari")
                 }
             }
-            // CAPTCHA SHEET
+
             .sheet(isPresented: $showingCaptcha) {
-                // We add the 'onToken:' label explicitly to fix the "Ambiguous init" error
                 ChanCaptchaView(
                     boardID: boardID,
                     threadNo: threadNo,
@@ -172,7 +162,6 @@ struct PostComposerNative: View {
             .sheet(isPresented: $showSafari) {
                 SafariView(url: postURL)
             }
-            // Error Alert
             .alert("Error", isPresented: $showErrorAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -181,14 +170,11 @@ struct PostComposerNative: View {
         }
     }
 
-    // MARK: - Computed Properties
 
     private var isFormInvalid: Bool {
         let hasText = !comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasImage = selectedData != nil
         
-        // 4chan rules: You usually need either text OR an image (unless replying, where text is required if no image)
-        // But strictly, you need a Captcha token.
         let hasContent = hasText || hasImage
         return !hasContent || captchaToken == nil
     }
@@ -198,7 +184,23 @@ struct PostComposerNative: View {
             .foregroundColor(captchaToken == nil ? .red : .green)
     }
 
-    // MARK: - Actions
+
+    private func solveCaptchaPreferNative() async {
+        await MainActor.run { isSolvingCaptcha = true }
+        do {
+            let (siteKey, baseURL) = try await CaptchaKeyResolver.fetchSiteKey(boardID: boardID, threadNo: threadNo)
+            let token = try await HCaptchaSolver.solve(siteKey: siteKey, baseURL: baseURL)
+            await MainActor.run {
+                self.captchaToken = token
+                self.isSolvingCaptcha = false
+            }
+        } catch {
+            await MainActor.run {
+                self.isSolvingCaptcha = false
+                self.showingCaptcha = true
+            }
+        }
+    }
 
     private func loadSelectedItem(_ item: PhotosPickerItem?) async {
         guard let item else {
@@ -211,11 +213,8 @@ struct PostComposerNative: View {
             if let data = try await item.loadTransferable(type: Data.self) {
                 await MainActor.run {
                     self.selectedData = data
-                    // Determine extension based on content type
                     let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "bin"
                     
-                    // Simple logic to name files. 4chan renames them anyway,
-                    // but the extension is critical for the server to accept it.
                     self.selectedFilename = "upload.\(ext)"
                 }
             }
@@ -250,7 +249,6 @@ struct PostComposerNative: View {
                 try await PostingManager.shared.submit(payload)
 
                 await MainActor.run {
-                    // Clear the global captcha ID after successful use
                     CaptchaStorage.shared.captchaId = nil
                     dismiss()
                 }

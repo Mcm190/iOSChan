@@ -83,7 +83,6 @@ struct HistoryView: View {
                 if total > 0 {
                     newPostsCount = total
                     showNewPostsBanner = true
-                    // Do NOT clear unread counters here; keep badges until the thread is opened.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                         withAnimation { showNewPostsBanner = false }
                     }

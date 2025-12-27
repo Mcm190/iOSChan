@@ -17,13 +17,11 @@ struct BoardRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // 1. Circle with /board/ style
             ZStack {
                 Circle()
                     .fill(Color.blue.opacity(0.1))
                     .frame(width: 50, height: 50)
 
-                // Added "/" around the board name
                 Text("/\(board.board)/")
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
                     .foregroundColor(.blue)
@@ -34,7 +32,6 @@ struct BoardRow: View {
                     .font(.headline)
                     .foregroundColor(.primary)
 
-                // 2. Cleaned Description (Fixed the Optional Error here)
                 Text(cleanHTML(board.meta_description ?? ""))
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -55,7 +52,6 @@ struct BoardRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    // Helper to clean the description text
     func cleanHTML(_ text: String) -> String {
         return text
             .replacingOccurrences(of: "&quot;", with: "\"")

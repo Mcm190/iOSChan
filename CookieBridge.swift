@@ -7,7 +7,6 @@ final class CookieBridge {
     private var cookies: [HTTPCookie] = []
 
     func update(with newCookies: [HTTPCookie]) {
-        // Merge by name+domain+path
         var dict: [String: HTTPCookie] = [:]
         for c in cookies { dict[key(for: c)] = c }
         for c in newCookies { dict[key(for: c)] = c }

@@ -8,7 +8,7 @@ struct GlobalSearchView: View {
     @State private var results: [SearchResult] = []
     @State private var searchArchived: Bool = false
     @State private var boards: [Board] = []
-    @State private var selectedBoards: Set<String> = [] // board codes
+    @State private var selectedBoards: Set<String> = []
 
     var body: some View {
         NavigationView {
@@ -28,7 +28,6 @@ struct GlobalSearchView: View {
                 }
                 .padding()
 
-                // Board picker (optional): allow narrowing to some boards
                 if !boards.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
@@ -121,7 +120,6 @@ struct GlobalSearchView: View {
             progressText = searchArchived ? "Fetching archives..." : "Fetching catalogs..."
         }
 
-        // Determine boards to search
         let boardsToSearch = Array(selectedBoards)
         var tempResults: [SearchResult] = []
         let lock = NSLock()

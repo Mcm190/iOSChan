@@ -1,13 +1,10 @@
 import Foundation
 
 class FourChanAPI {
-    // Shared instance
     static let shared = FourChanAPI()
     
-    // Public init
     init() {}
     
-    // Helper to create a request that ignores cache
     private func makeRequest(url: URL) -> URLRequest {
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData // <--- THE FIX
@@ -15,7 +12,6 @@ class FourChanAPI {
         return request
     }
     
-    // 1. Fetch Boards
     func fetchBoards(completion: @escaping (Result<[Board], Error>) -> Void) {
         guard let url = URL(string: "https://a.4cdn.org/boards.json") else { return }
         
@@ -34,7 +30,6 @@ class FourChanAPI {
         }.resume()
     }
     
-    // 2. Fetch Threads (Catalog)
     func fetchThreads(boardID: String, completion: @escaping (Result<[Thread], Error>) -> Void) {
         guard let url = URL(string: "https://a.4cdn.org/\(boardID)/catalog.json") else { return }
         
@@ -54,7 +49,6 @@ class FourChanAPI {
         }.resume()
     }
     
-    // 3. Fetch Single Thread Details
     func fetchThreadDetails(board: String, threadNo: Int, completion: @escaping (Result<[Thread], Error>) -> Void) {
         guard let url = URL(string: "https://a.4cdn.org/\(board)/thread/\(threadNo).json") else { return }
         
@@ -64,7 +58,6 @@ class FourChanAPI {
             if let error = error { completion(.failure(error)); return }
             guard let http = response as? HTTPURLResponse else { completion(.failure(NSError(domain: "API", code: -1))); return }
 
-            // Handle HTTP status codes explicitly
             if http.statusCode == 404 {
                 completion(.failure(APIError.notFound))
                 return
@@ -81,9 +74,6 @@ class FourChanAPI {
         }.resume()
     }
 
-    // 4. Fetch Archived Threads (limited)
-    // Uses the 4cdn "archive" endpoint which returns an array of thread IDs.
-    // For each ID we fetch the thread details and return the OP posts as `Thread` objects.
     func fetchArchivedThreads(boardID: String, limit: Int = 50, completion: @escaping (Result<[Thread], Error>) -> Void) {
         guard let url = URL(string: "https://a.4cdn.org/\(boardID)/archive.json") else { return }
 
@@ -104,7 +94,6 @@ class FourChanAPI {
 
                 for id in limited {
                     group.enter()
-                    // reuse existing method to fetch full thread and take the OP
                     self.fetchThreadDetails(board: boardID, threadNo: id) { res in
                         switch res {
                         case .success(let posts):
@@ -124,7 +113,6 @@ class FourChanAPI {
                     if results.isEmpty, let err = lastError {
                         completion(.failure(err))
                     } else {
-                        // sort by most recent OP time first
                         let sorted = results.sorted(by: { $0.time > $1.time })
                         completion(.success(sorted))
                     }
@@ -136,7 +124,6 @@ class FourChanAPI {
     }
 }
 
-// API specific errors so callers can distinguish 404 from network errors
 enum APIError: Error {
     case notFound
     case noData

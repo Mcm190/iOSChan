@@ -1,8 +1,5 @@
 import Foundation
 
-// MARK: - Board Models
-
-// Added 'Sendable' to tell Swift this is safe to pass between threads
 struct BoardListResponse: Codable, Sendable {
     let boards: [Board]
 }
@@ -16,7 +13,6 @@ struct Board: Codable, Identifiable, Sendable {
     var id: String { board }
 }
 
-// MARK: - Thread Models
 
 struct CatalogPage: Codable, Sendable {
     let page: Int

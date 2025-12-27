@@ -39,12 +39,18 @@ struct ThreadDetailView: View {
     @Environment(\.openURL) private var openURL
     @ObservedObject private var settings = AppSettings.shared
 
+    @State private var lastReadPostNo: Int? = nil
+    @State private var showJumpToBottomToast = false
+    @State private var scrollToPostNo: Int? = nil
+    @State private var visiblePostNos: Set<Int> = []
+    @State private var lastMaxSeenPostNo: Int? = nil
+    @State private var hasVisitedBefore: Bool = false
+
     private var threadURL: URL {
         URL(string: "https://boards.4chan.org/\(boardID)/thread/\(threadNo)")!
     }
 
     private var isSFWBoard: Bool { BoardDirectory.shared.isSFW(boardID: boardID) }
-    // Prefer Favorites/History models? We don't have `Board` here, so infer by common 4chan convention: boards with trailing 'b', 'r9k', 'hc', etc. are NSFW. As a simple default, treat as SFW unless we can override later.
     private var threadTint: Color { isSFWBoard ? .chanSFW : .chanNSFW }
 
     var body: some View {
@@ -52,13 +58,22 @@ struct ThreadDetailView: View {
             // Main list
             ScrollViewReader { proxy in
                 List(filteredPosts, id: \.no) { post in
-                    // Break complex expressions into locals to help the compiler
+                    if isFirstNewPost(post.no) {
+                        NewPostsDivider()
+                            .listRowInsets(EdgeInsets())
+                    }
+
                     let postReplies = repliesIndex[post.no] ?? []
                     let isHighlighted = (highlightedPostNo == post.no)
                     let isOP = post.no == (posts.first?.no ?? post.no)
+                    let opPost = posts.first
+                    let threadTitle = opPost?.sub ?? cleanHTML(opPost?.com ?? "Thread \(threadNo)")
 
                     PostRowView(
                         boardID: boardID,
+                        threadNo: threadNo,
+                        threadTitle: threadTitle,
+                        threadTim: opPost?.tim,
                         post: post,
                         replies: postReplies,
                         postLookup: { no in posts.first(where: { $0.no == no }) },
@@ -76,6 +91,8 @@ struct ThreadDetailView: View {
                     )
                     .id(post.no)
                     .listRowBackground(threadTint.opacity(0.20))
+                    .onAppear { visiblePostNos.insert(post.no) }
+                    .onDisappear { visiblePostNos.remove(post.no) }
                 }
                 .listStyle(.plain)
                 .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: isSearchVisible ? .always : .automatic), prompt: "Search posts")
@@ -105,19 +122,37 @@ struct ThreadDetailView: View {
                     }
                     return .systemAction
                 })
+                .onAppear {
+                    hasVisitedBefore = HistoryManager.shared.history.contains(where: { $0.boardID == boardID && $0.threadNo == threadNo })
+                    loadPosts()
+                    if let savedTop = ThreadReadState.shared.lastTopPostNo(boardID: boardID, threadNo: threadNo) {
+                        lastReadPostNo = savedTop
+                    }
+                    lastMaxSeenPostNo = ThreadReadState.shared.lastMaxPostNo(boardID: boardID, threadNo: threadNo)
+                }
+                .onChange(of: posts.count) { _ in
+                    buildRepliesIndex()
+                    rebuildMediaList()
+                    YouPostsManager.shared.clearUnreadForThread(boardID: boardID, threadNo: threadNo)
+                    if hasVisitedBefore, let target = lastReadPostNo, posts.contains(where: { $0.no == target }) {
+                        DispatchQueue.main.async {
+                            withAnimation { proxy.scrollTo(target, anchor: .top) }
+                        }
+                    }
+                }
+                .onChange(of: scrollToPostNo) { target in
+                    if let target = target {
+                        withAnimation { proxy.scrollTo(target, anchor: .bottom) }
+                        scrollToPostNo = nil
+                    }
+                }
+
             }
             .navigationTitle("Thread \(threadNo.formatted(.number.grouping(.never)))")
-                .onAppear { loadPosts() }
-            .onChange(of: posts.count) { _ in
-                buildRepliesIndex()
-                rebuildMediaList()
-            }
 
-            // Image Browser
             .sheet(isPresented: Binding(get: { selectedImageIndex != nil }, set: { if !$0 { selectedImageIndex = nil } })) {
                 if let idx = selectedImageIndex {
                     ImageBrowser(media: mediaItems, currentIndex: idx, isPresented: Binding(get: { selectedImageIndex != nil }, set: { if !$0 { selectedImageIndex = nil } }), onBack: {
-                        // Close browser and re-open gallery
                         selectedImageIndex = nil
                         showGallery = true
                     })
@@ -133,7 +168,6 @@ struct ThreadDetailView: View {
                 })
             }
 
-            // Toolbar Actions: collapsed into ellipsis menu
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
@@ -147,6 +181,15 @@ struct ThreadDetailView: View {
                         }
                         Button(action: { showGallery = true }) {
                             Label("Gallery", systemImage: "photo.on.rectangle.angled")
+                        }
+                        Button(action: {
+                            if let last = posts.last?.no {
+                                scrollToPostNo = last
+                                showJumpToBottomToast = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { showJumpToBottomToast = false }
+                            }
+                        }) {
+                            Label("Jump to Bottom", systemImage: "arrow.down.to.line")
                         }
                         Button(action: loadPosts) {
                             Label("Refresh", systemImage: "arrow.clockwise")
@@ -168,7 +211,6 @@ struct ThreadDetailView: View {
                 }
             }
 
-            // Download progress overlay
             if isDownloadingAll {
                 Color.black.opacity(0.4).edgesIgnoringSafeArea(.all)
                 VStack(spacing: 12) {
@@ -187,14 +229,12 @@ struct ThreadDetailView: View {
             }
         }
         .background(threadTint.opacity(0.12))
-        // Open thread in Safari (for replying / posting)
         .sheet(isPresented: $showSafariThread) {
             SafariView(url: threadURL)
         }
         .sheet(isPresented: $showNativeComposer) {
             PostComposerNative(boardID: boardID, threadNo: threadNo, initialComment: composerInitialComment)
         }
-        // Quote copied toast overlay
         .overlay(alignment: .top) {
             if showQuoteCopiedToast {
                 Text("Copied \(quoteCopiedText)")
@@ -207,18 +247,58 @@ struct ThreadDetailView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        .overlay(alignment: .top) {
+            if showJumpToBottomToast {
+                Text("Jumped to bottom")
+                    .font(.caption.bold())
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Capsule())
+                    .padding(.top, 44)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
         .animation(.easeInOut(duration: 0.2), value: showQuoteCopiedToast)
+        .animation(.easeInOut(duration: 0.2), value: showJumpToBottomToast)
         .environment(\.dynamicTypeSize, settings.adjustedDynamicType)
-
-        // Alerts
         .alert("Download Complete", isPresented: $showDownloadAlert) {
             Button("OK", role: .cancel) { }
         } message: {
             Text(downloadStatusMessage)
         }
+        .onDisappear {
+            if let top = topVisiblePostNo() {
+                ThreadReadState.shared.setLastTopPostNo(boardID: boardID, threadNo: threadNo, postNo: top)
+            }
+            if let latest = posts.last?.no {
+                ThreadReadState.shared.setLastMaxPostNo(boardID: boardID, threadNo: threadNo, postNo: latest)
+            }
+        }
     }
 
-    // MARK: - Helpers
+
+    private func isFirstNewPost(_ postNo: Int) -> Bool {
+        guard let last = lastMaxSeenPostNo else { return false }
+        guard let idx = posts.firstIndex(where: { $0.no == postNo }),
+              let lastIdx = posts.firstIndex(where: { $0.no == last }) else { return false }
+        return idx == lastIdx + 1
+    }
+
+    private func topVisiblePostNo() -> Int? {
+        guard !visiblePostNos.isEmpty else { return nil }
+        var bestNo: Int?
+        var bestIdx: Int?
+        for no in visiblePostNos {
+            if let idx = posts.firstIndex(where: { $0.no == no }) {
+                if bestIdx == nil || idx < bestIdx! {
+                    bestIdx = idx
+                    bestNo = no
+                }
+            }
+        }
+        return bestNo
+    }
 
     func copyQuote(_ postNo: Int) {
         let quote = ">>\(postNo)"
@@ -246,7 +326,6 @@ struct ThreadDetailView: View {
                     self.posts = fetchedPosts
                     self.buildRepliesIndex()
 
-                    // ✅ NEW: clear unread + update lastReplyCount when viewing the thread
                     let replyCount = max(0, fetchedPosts.count - 1)
                     FavoritesManager.shared.markSeen(
                         boardID: boardID,
@@ -254,18 +333,18 @@ struct ThreadDetailView: View {
                         replyCount: replyCount
                     )
 
-                    // Record to history (use OP title or first comment)
-                    let firstPost = fetchedPosts.first
-                    let title = firstPost?.sub ?? cleanHTML(firstPost?.com ?? "Thread \(threadNo)")
-                    HistoryManager.shared.add(boardID: boardID, threadNo: threadNo, title: title, tim: firstPost?.tim)
+                    HistoryManager.shared.add(boardID: boardID, threadNo: threadNo, title: fetchedPosts.first?.sub ?? cleanHTML(fetchedPosts.first?.com ?? "Thread \(threadNo)"), tim: fetchedPosts.first?.tim)
+                    HistoryManager.shared.markSeen(boardID: boardID, threadNo: threadNo, replyCount: replyCount)
 
-                    // Rebuild media list for gallery/browser
                     rebuildMediaList()
+                    YouPostsManager.shared.clearUnreadForThread(boardID: boardID, threadNo: threadNo)
+
+                    self.lastReadPostNo = ThreadReadState.shared.lastTopPostNo(boardID: boardID, threadNo: threadNo)
+                    self.lastMaxSeenPostNo = ThreadReadState.shared.lastMaxPostNo(boardID: boardID, threadNo: threadNo)
                 }
 
             case .failure(let error):
                 DispatchQueue.main.async {
-                    // Only mark dead when API explicitly reports 404
                     if let apiErr = error as? APIError, case .notFound = apiErr {
                         FavoritesManager.shared.markDead(boardID: boardID, threadNo: threadNo)
                         HistoryManager.shared.markDead(boardID: boardID, threadNo: threadNo)
@@ -286,7 +365,6 @@ struct ThreadDetailView: View {
             .replacingOccurrences(of: "&amp;", with: "&")
     }
 
-    // Build media item list for the current posts (includes images and videos)
     func rebuildMediaList() {
         mediaItems = posts.compactMap { post in
             if let tim = post.tim {
@@ -307,7 +385,6 @@ struct ThreadDetailView: View {
         let lines = cleaned.components(separatedBy: "\n")
 
         for (index, line) in lines.enumerated() {
-            // Greentext: line starts with '>' but not '>>'
             let isGreentext = line.hasPrefix(">") && !line.hasPrefix(">>")
 
             let nsLine = line as NSString
@@ -334,7 +411,6 @@ struct ThreadDetailView: View {
                 }
             }
 
-            // Sort left-to-right
             events.sort { $0.range.location < $1.range.location }
 
             var currentLocation = 0
@@ -363,7 +439,6 @@ struct ThreadDetailView: View {
                 currentLocation = r.location + r.length
             }
 
-            // Tail
             if currentLocation < length {
                 let tailRange = NSRange(location: currentLocation, length: length - currentLocation)
                 var tail = AttributedString(nsLine.substring(with: tailRange))
@@ -371,7 +446,6 @@ struct ThreadDetailView: View {
                 result.append(tail)
             }
 
-            // Newline between original lines
             if index < lines.count - 1 {
                 result.append(AttributedString("\n"))
             }
@@ -381,7 +455,6 @@ struct ThreadDetailView: View {
     }
 
     func buildRepliesIndex() {
-        // Build a reverse index: targetPostNo -> [replyingPostNos]
         var temp: [Int: Set<Int>] = [:]
         let pattern = #">>(\d+)"#
         let regex = try? NSRegularExpression(pattern: pattern, options: [])
@@ -420,7 +493,6 @@ struct ThreadDetailView: View {
         }
     }
 
-    // Filter posts by `searchText` (case-insensitive)
     var filteredPosts: [Thread] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return posts }
@@ -431,7 +503,6 @@ struct ThreadDetailView: View {
         }
     }
 
-    // MARK: - Download Logic
 
     func downloadAllImagesToFiles() {
         isDownloadingAll = true
@@ -524,6 +595,9 @@ struct ThreadDetailView: View {
 
 struct PostRowView: View {
     let boardID: String
+    let threadNo: Int
+    let threadTitle: String?
+    let threadTim: Int?
     let post: Thread
     let replies: [Int]
     let postLookup: (Int) -> Thread?
@@ -535,11 +609,11 @@ struct PostRowView: View {
     let isArchived: Bool
     @Environment(\.openURL) private var openURL
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var youManager = YouPostsManager.shared
     @State private var showRepliesPopover = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            // Thumbnail
             if let tim = post.tim {
                 let fileExt = post.ext ?? ".jpg"
                 let thumbURL = URL(string: "https://i.4cdn.org/\(boardID)/\(tim)s.jpg")
@@ -573,9 +647,7 @@ struct PostRowView: View {
                 }
             }
 
-            // Text / Meta
             VStack(alignment: .leading, spacing: 4 * settings.density.spacingMultiplier) {
-                // Header
                 HStack(alignment: .firstTextBaseline, spacing: 8 * settings.density.spacingMultiplier) {
                     Text(post.name ?? "Anonymous")
                         .font(.caption)
@@ -586,6 +658,11 @@ struct PostRowView: View {
                         .font(.caption)
                         .foregroundColor(.gray)
                         .onTapGesture { copyQuote(post.no) }
+                    if youManager.isYou(boardID: boardID, threadNo: threadNo, postNo: post.no) {
+                        Text("(You)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.blue)
+                    }
 
                     if settings.showIDs, let pid = post.posterID {
                         Text("ID: \(pid)")
@@ -657,7 +734,6 @@ struct PostRowView: View {
                     .foregroundColor(.secondary)
                 }
 
-                // Subject (if present)
                 if let sub = post.sub {
                     Text(sub)
                         .font(.subheadline.weight(.semibold))
@@ -666,7 +742,6 @@ struct PostRowView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                // File metadata
                 if let filename = post.filename, let fsize = post.fsize, let ext = post.ext {
                     Text("\(filename)\(ext) • \(formatFileSize(fsize))")
                         .font(.system(size: 10))
@@ -675,7 +750,6 @@ struct PostRowView: View {
                         .allowsHitTesting(false)
                 }
 
-                // Comment body
                 if let comment = post.com {
                     Text(attributedComment(comment))
                         .font(.body)
@@ -693,13 +767,18 @@ struct PostRowView: View {
                 }
             }
         }
+        .contextMenu {
+            let isMarked = youManager.isYou(boardID: boardID, threadNo: threadNo, postNo: post.no)
+            Button(isMarked ? "Unmark (You)" : "Mark as (You)") {
+                youManager.toggleYou(boardID: boardID, threadNo: threadNo, postNo: post.no, threadTitle: threadTitle, tim: threadTim)
+            }
+        }
         .padding(.vertical, 4 * settings.density.spacingMultiplier)
         .background(isArchived ? Color(UIColor.systemGray5).opacity(0.06) : Color.clear)
         .background(highlighted ? Color.yellow.opacity(0.15) : Color.clear)
         .background(settings.highlightOP && isOP ? Color.blue.opacity(0.06) : Color.clear)
     }
 
-    // Local helper for saving images
     private func saveImageToPhotoLibrary(from url: URL?) {
         guard let url = url else { return }
         Task {
@@ -793,6 +872,72 @@ struct ReplyPreviewRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+struct NewPostsDivider: View {
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Rectangle().fill(Color.red).frame(height: 2)
+            Text("New posts")
+                .font(.caption.bold())
+                .foregroundColor(.red)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(Color.red.opacity(0.12))
+                .clipShape(Capsule())
+                .padding(.leading, 12)
+        }
+    }
+}
+
+final class ThreadReadState {
+    static let shared = ThreadReadState()
+    private let defaults = UserDefaults.standard
+    private let keyPrefix = "lastReadPost_" // key format: lastReadPost_/board/thread
+    private let keyTopPrefix = "lastTopPost_"
+    private let keyMaxPrefix = "lastMaxPost_"
+    private init() {}
+    private func key(boardID: String, threadNo: Int) -> String {
+        return "\(keyPrefix)\(boardID)/\(threadNo)"
+    }
+    private func topKey(boardID: String, threadNo: Int) -> String {
+        return "\(keyTopPrefix)\(boardID)/\(threadNo)"
+    }
+    private func maxKey(boardID: String, threadNo: Int) -> String {
+        return "\(keyMaxPrefix)\(boardID)/\(threadNo)"
+    }
+
+    func lastReadPostNo(boardID: String, threadNo: Int) -> Int? {
+        let k = key(boardID: boardID, threadNo: threadNo)
+        let v = defaults.integer(forKey: k)
+        return v == 0 ? nil : v
+    }
+
+    func setLastReadPostNo(boardID: String, threadNo: Int, postNo: Int) {
+        let k = key(boardID: boardID, threadNo: threadNo)
+        defaults.set(postNo, forKey: k)
+    }
+
+    func lastTopPostNo(boardID: String, threadNo: Int) -> Int? {
+        let k = topKey(boardID: boardID, threadNo: threadNo)
+        let v = defaults.integer(forKey: k)
+        return v == 0 ? nil : v
+    }
+    func setLastTopPostNo(boardID: String, threadNo: Int, postNo: Int) {
+        let k = topKey(boardID: boardID, threadNo: threadNo)
+        defaults.set(postNo, forKey: k)
+    }
+
+    func lastMaxPostNo(boardID: String, threadNo: Int) -> Int? {
+        let k = maxKey(boardID: boardID, threadNo: threadNo)
+        let v = defaults.integer(forKey: k)
+        return v == 0 ? nil : v
+    }
+
+    func setLastMaxPostNo(boardID: String, threadNo: Int, postNo: Int) {
+        let k = maxKey(boardID: boardID, threadNo: threadNo)
+        defaults.set(postNo, forKey: k)
     }
 }
 

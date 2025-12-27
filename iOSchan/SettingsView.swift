@@ -81,10 +81,8 @@ struct SettingsView: View {
                     }
 
                     Button(role: .destructive) {
-                        // Remove cached folders and also clear favorites dead markers
                         Task {
                             do { try CacheManager.clearCaches() } catch { print("Cache clear error: \(error)") }
-                            // Also reset dead markers so everything looks fresh
                             FavoritesManager.shared.favorites = FavoritesManager.shared.favorites.map { fav in
                                 var f = fav
                                 f.isDead = nil

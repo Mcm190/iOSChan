@@ -9,7 +9,6 @@ struct SavedHistory: Codable, Identifiable {
     var tim: Int?
     var lastVisited: Date
     var isDead: Bool?
-    // Track last known reply count and unread count for history view
     var lastReplyCount: Int?
     var unreadCount: Int
 }
@@ -18,7 +17,6 @@ class HistoryManager: ObservableObject {
     static let shared = HistoryManager()
 
     @Published var history: [SavedHistory] = []
-    // When the user last opened the History tab
     @Published var lastViewedAt: Date? = nil
     private var pollTimer: Timer?
 
@@ -39,10 +37,12 @@ class HistoryManager: ObservableObject {
                 switch result {
                 case .success(let posts):
                     let count = max(0, posts.count - 1)
-                    if let idx = self.history.firstIndex(where: { $0.boardID == item.boardID && $0.threadNo == item.threadNo }) {
-                        if self.history[idx].lastReplyCount == nil {
-                            self.history[idx].lastReplyCount = count
-                            self.save()
+                    DispatchQueue.main.async {
+                        if let idx = self.history.firstIndex(where: { $0.boardID == item.boardID && $0.threadNo == item.threadNo }) {
+                            if self.history[idx].lastReplyCount == nil {
+                                self.history[idx].lastReplyCount = count
+                                self.save()
+                            }
                         }
                     }
                 case .failure:
@@ -59,20 +59,24 @@ class HistoryManager: ObservableObject {
                 switch result {
                 case .success(let posts):
                     let count = max(0, posts.count - 1)
-                    if let idx = self.history.firstIndex(where: { $0.boardID == item.boardID && $0.threadNo == item.threadNo }) {
-                        let last = self.history[idx].lastReplyCount ?? count
-                        if count > last {
-                            self.history[idx].unreadCount += (count - last)
+                    DispatchQueue.main.async {
+                        if let idx = self.history.firstIndex(where: { $0.boardID == item.boardID && $0.threadNo == item.threadNo }) {
+                            let last = self.history[idx].lastReplyCount ?? count
+                            if count > last {
+                                self.history[idx].unreadCount += (count - last)
+                            }
+                            self.history[idx].lastReplyCount = count
+                            self.save()
                         }
-                        self.history[idx].lastReplyCount = count
-                        self.save()
                     }
                 case .failure(let error):
-                    // Only mark dead on explicit 404 from API; ignore transient errors
+
                     if let apiErr = error as? APIError, case .notFound = apiErr {
-                        if let idx = self.history.firstIndex(where: { $0.boardID == item.boardID && $0.threadNo == item.threadNo }) {
-                            self.history[idx].isDead = true
-                            self.save()
+                        DispatchQueue.main.async {
+                            if let idx = self.history.firstIndex(where: { $0.boardID == item.boardID && $0.threadNo == item.threadNo }) {
+                                self.history[idx].isDead = true
+                                self.save()
+                            }
                         }
                     }
                 }
@@ -97,30 +101,39 @@ class HistoryManager: ObservableObject {
         save()
     }
 
-    // Update counts for a thread (called from FavoritesManager polling)
     func updateCounts(boardID: String, threadNo: Int, replyCount: Int) {
-        if let idx = history.firstIndex(where: { $0.boardID == boardID && $0.threadNo == threadNo }) {
-            let last = history[idx].lastReplyCount ?? replyCount
-            if replyCount > last {
-                history[idx].unreadCount += (replyCount - last)
+        DispatchQueue.main.async {
+            if let idx = self.history.firstIndex(where: { $0.boardID == boardID && $0.threadNo == threadNo }) {
+                let last = self.history[idx].lastReplyCount ?? replyCount
+                if replyCount > last {
+                    self.history[idx].unreadCount += (replyCount - last)
+                }
+                self.history[idx].lastReplyCount = replyCount
+                self.save()
             }
-            history[idx].lastReplyCount = replyCount
-            save()
         }
     }
 
-    // Compute total new posts across history
     var totalUnread: Int {
         history.reduce(0) { $0 + $1.unreadCount }
     }
 
-    // Mark history tab as viewed (clears unread counters)
     func markHistoryViewed() {
         lastViewedAt = Date()
         for i in history.indices {
             history[i].unreadCount = 0
         }
         save()
+    }
+
+    func markSeen(boardID: String, threadNo: Int, replyCount: Int) {
+        DispatchQueue.main.async {
+            if let idx = self.history.firstIndex(where: { $0.boardID == boardID && $0.threadNo == threadNo }) {
+                self.history[idx].lastReplyCount = replyCount
+                self.history[idx].unreadCount = 0
+                self.save()
+            }
+        }
     }
 
     func remove(boardID: String, threadNo: Int) {
@@ -131,6 +144,7 @@ class HistoryManager: ObservableObject {
     func clear() {
         history.removeAll()
         save()
+        YouPostsManager.shared.clearAllUnread()
     }
 
     func markDead(boardID: String, threadNo: Int) {
@@ -160,3 +174,4 @@ class HistoryManager: ObservableObject {
         }
     }
 }
+

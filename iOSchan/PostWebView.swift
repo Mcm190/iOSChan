@@ -1,11 +1,10 @@
 import SwiftUI
 import WebKit
 
-// Access shared process pool for consistent cookies/clearance with captcha
 
 struct PostWebView: UIViewRepresentable {
     let boardID: String
-    let threadNo: Int? // nil = new thread
+    let threadNo: Int?
     let prefillName: String
     let prefillSubject: String
     let prefillComment: String
@@ -22,7 +21,6 @@ struct PostWebView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        // Share process pool with captcha so cookies/clearance are consistent
         config.processPool = CaptchaWebViewController.sharedProcessPool
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
@@ -31,7 +29,6 @@ struct PostWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        // Only load once
         if webView.url != nil { return }
 
         let urlString: String
@@ -47,7 +44,6 @@ struct PostWebView: UIViewRepresentable {
         webView.load(req)
     }
 
-    // MARK: - Coordinator
     final class Coordinator: NSObject, WKNavigationDelegate {
         let boardID: String
         let threadNo: Int?
@@ -67,8 +63,6 @@ struct PostWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            // Some pages do an extra internal navigation; keep it simple
-            // but don’t spam.
             guard !didPrefill else { return }
             didPrefill = true
 
@@ -83,7 +77,6 @@ struct PostWebView: UIViewRepresentable {
                 if let error {
                     print("Prefill JS error: \(error)")
                 } else {
-                    // print("Prefill JS result:", result ?? "nil")
                 }
             }
         }
@@ -92,11 +85,6 @@ struct PostWebView: UIViewRepresentable {
             let nameJS = jsonStringLiteral(name)
             let subjectJS = jsonStringLiteral(subject)
             let commentJS = jsonStringLiteral(comment)
-
-            // Strategy:
-            // 1) Try to click "Start a New Thread" (board page) or "Reply" (thread page).
-            // 2) Find the post form inputs by name attributes.
-            // 3) Fill them and scroll into view.
 
             return """
             (function() {
@@ -115,19 +103,14 @@ struct PostWebView: UIViewRepresentable {
                 return true;
               }
 
-              // Try common UI triggers
-              // Board page: "Start a New Thread" is often a link/button with class/ID variations
               if (!\(isReply ? "true" : "false")) {
                 clickIfExists('a[href*="#post"], a[href*="post"], a:contains("Start a New Thread")');
-                // Some pages use a button with id "togglePostFormLink" or similar
                 clickIfExists('#togglePostFormLink');
                 clickIfExists('.new-thread-button');
               } else {
-                // Thread page: there’s usually a Reply button/link
                 clickIfExists('a.replylink, a#replylink, .reply-button, a[href*="#post"]');
               }
 
-              // Fill fields (these are stable across many themes)
               var nameSet = \(nameJS).length ? setVal('input[name="name"]', \(nameJS)) : true;
 
               var subSet = true;
@@ -137,7 +120,6 @@ struct PostWebView: UIViewRepresentable {
 
               var comSet = \(commentJS).length ? setVal('textarea[name="com"]', \(commentJS)) : true;
 
-              // Scroll to comment box
               var com = document.querySelector('textarea[name="com"]');
               if (com) com.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
@@ -147,11 +129,9 @@ struct PostWebView: UIViewRepresentable {
         }
 
         private func jsonStringLiteral(_ s: String) -> String {
-            // Encode string as JSON string literal (safe for JS)
             if let data = try? JSONSerialization.data(withJSONObject: [s], options: []),
                let json = String(data: data, encoding: .utf8),
                json.count >= 4 {
-                // ["..."] -> "..."
                 let start = json.index(after: json.startIndex)
                 let end = json.index(before: json.endIndex)
                 return String(json[start..<end])

@@ -1,9 +1,11 @@
 import SwiftUI
 
-// 1. The Root View with Tabs
 struct ContentView: View {
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var favoritesManager = FavoritesManager.shared
+    @ObservedObject private var youManager = YouPostsManager.shared
+    @ObservedObject private var historyManager = HistoryManager.shared
+    @ObservedObject private var deepLink = DeepLinkRouter.shared
     
     var body: some View {
         TabView {
@@ -16,15 +18,18 @@ struct ContentView: View {
 
             HistoryView()
                 .tabItem { Label("History", systemImage: "clock") }
+                .badge(historyManager.totalUnread + youManager.totalUnread)
 
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
         }
         .preferredColorScheme(settings.preferredColorScheme)
+        .sheet(item: $deepLink.target) { target in
+            ThreadDetailView(boardID: target.boardID, threadNo: target.threadNo, isArchived: false)
+        }
     }
 }
 
-// 2. The Board List
 struct BoardListView: View {
     @State private var boards: [Board] = []
     @ObservedObject private var settings = AppSettings.shared
@@ -34,7 +39,6 @@ struct BoardListView: View {
     var body: some View {
         NavigationView {
             List {
-                // Favorites Section
                 if !favoritesManager.savedBoards.isEmpty {
                     Section("Favorites") {
                         ForEach(favoritesManager.savedBoards) { favBoard in
@@ -45,7 +49,6 @@ struct BoardListView: View {
                                     }
                                 }
                             } else {
-                                // In case the saved board isn't in the latest fetch, still show a simple row
                                 NavigationLink(destination: EmptyView()) {
                                     HStack {
                                         Text("/\(favBoard.board)/")
@@ -63,7 +66,6 @@ struct BoardListView: View {
                     }
                 }
 
-                // All Boards (excluding favorites to avoid duplicates)
                 Section("All Boards") {
                     ForEach(boards.filter { !favoritesManager.isBoardFavorite($0.board) }, id: \.board) { board in
                         NavigationLink(destination: ThreadView(board: board)) {
@@ -86,7 +88,10 @@ struct BoardListView: View {
             .listStyle(.plain)
             .environment(\.dynamicTypeSize, settings.dynamicType)
             .onAppear {
-                if boards.isEmpty { fetchData() }
+                if boards.isEmpty {
+                    fetchData()
+                    UserDefaults.standard.set(true, forKey: "hasLoadedBoardsOnce")
+                }
                 BoardDirectory.shared.ensureLoaded()
             }
             .refreshable { fetchData() }
@@ -123,7 +128,6 @@ struct BoardListView: View {
     }
 }
 
-// 3. The Thread View (Supports List OR Grid)
 struct ThreadView: View {
     let board: Board
 
@@ -131,25 +135,19 @@ struct ThreadView: View {
     @State private var selectedImageURL: URL?
     @ObservedObject private var settings = AppSettings.shared
 
-    // Toggle State for Grid View
     @State private var isGridView = false
-    // Toggle State for Live / Archived threads
     @State private var showArchived = false
-    // Toolbar popover for single-click menu on macOS
     @State private var showToolbarMenuPopover = false
-    // Search
     @State private var searchText: String = ""
     @FocusState private var isSearchFieldFocused: Bool
     @State private var isSearchVisible: Bool = false
 
-    // ✅ New Thread: open BOARD page in Safari (no /post endpoint)
     @State private var showSafariBoard = false
     @State private var showNativeComposer = false
     private var boardURL: URL {
         URL(string: "https://boards.4chan.org/\(board.board)/")!
     }
 
-    // Grid Layout Definition (2 columns)
     let columns = [
         GridItem(.flexible(), spacing: 10),
         GridItem(.flexible(), spacing: 10)
@@ -161,7 +159,6 @@ struct ThreadView: View {
     var body: some View {
         Group {
             if isGridView {
-                // --- GRID VIEW ---
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 10) {
                         ForEach(filteredThreads, id: \.no) { thread in
@@ -182,7 +179,6 @@ struct ThreadView: View {
                 .scrollContentBackground(.hidden)
                 .background(threadTint.opacity(0.12))
             } else {
-                // --- LIST VIEW ---
                 List(filteredThreads, id: \.no) { thread in
                     ThreadListRow(
                         board: board,
@@ -202,12 +198,17 @@ struct ThreadView: View {
             }
         }
         .navigationTitle("/\(board.board)/")
-        .onAppear { loadThreads() }
+        .onAppear {
+            let key = "hasLoaded_\(board.board)"
+            if UserDefaults.standard.object(forKey: key) == nil {
+                loadThreads()
+                UserDefaults.standard.set(true, forKey: key)
+            }
+        }
         .fullScreenCover(item: $selectedImageURL) { url in
             FullScreenImageView(imageURL: url)
         }
 
-        // ✅ This is now the ONLY "New Thread" behaviour: open board page in Safari
         .sheet(isPresented: $showSafariBoard) {
             SafariView(url: boardURL)
         }
@@ -216,7 +217,6 @@ struct ThreadView: View {
         }
 
         .toolbar {
-            // Live / Archived selector on the leading side
             ToolbarItem(placement: .navigationBarLeading) {
                 Picker("", selection: $showArchived) {
                     Text("Live").tag(false)
@@ -315,7 +315,6 @@ struct ThreadView: View {
         }
     }
 
-    // Filtered threads based on `searchText` (case-insensitive, iterative)
     var filteredThreads: [Thread] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return threads }
@@ -327,9 +326,7 @@ struct ThreadView: View {
     }
 }
 
-// --- HELPER VIEWS ---
 
-// Sub-view for the LIST Layout
 struct ThreadListRow: View {
     let board: Board
     let thread: Thread
@@ -339,13 +336,11 @@ struct ThreadListRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            // Image Thumbnail
             if let tim = thread.tim {
                 ThumbnailView(board: board.board, tim: tim, ext: thread.ext, selectedImageURL: $selectedImageURL)
                     .frame(width: CGFloat(80) * settings.thumbnailScale, height: CGFloat(80) * settings.thumbnailScale)
             }
 
-            // Text Details
             NavigationLink(destination: ThreadDetailView(boardID: board.board, threadNo: thread.no, isArchived: isArchived)) {
                 VStack(alignment: .leading, spacing: 5 * settings.density.spacingMultiplier) {
                     if let subject = thread.sub {
@@ -391,7 +386,6 @@ struct ThreadListRow: View {
     }
 }
 
-// Sub-view for the GRID Layout
 struct ThreadGridCell: View {
     let board: Board
     let thread: Thread
@@ -401,7 +395,6 @@ struct ThreadGridCell: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Image (Takes up top half)
             if let tim = thread.tim {
                 ThumbnailView(board: board.board, tim: tim, ext: thread.ext, selectedImageURL: $selectedImageURL)
                     .frame(maxWidth: .infinity)
@@ -409,7 +402,6 @@ struct ThreadGridCell: View {
                     .clipped()
             }
 
-            // Text (Clickable to go to thread)
                 NavigationLink(destination: ThreadDetailView(boardID: board.board, threadNo: thread.no, isArchived: isArchived)) {
                 VStack(alignment: .leading, spacing: 4 * settings.density.spacingMultiplier) {
                     if let subject = thread.sub {
@@ -458,7 +450,6 @@ struct ThreadGridCell: View {
     }
 }
 
-// Reusable Thumbnail Component
 struct ThumbnailView: View {
     let board: String
     let tim: Int
@@ -506,7 +497,6 @@ struct ThumbnailView: View {
     }
 }
 
-// 4. Favorites View
 struct FavoritesView: View {
     @ObservedObject var favoritesManager = FavoritesManager.shared
 
@@ -580,7 +570,6 @@ struct FavoritesView: View {
     }
 }
 
-// Helper Functions
 func cleanHTML(_ text: String) -> String {
     return text.replacingOccurrences(of: "<br>", with: "\n")
         .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression, range: nil)
