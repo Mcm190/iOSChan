@@ -1,4 +1,4 @@
-4chan broswer written in Swift. WebM/mp4 support. Full gallery view. Ability to mark posts as (you) and recieve system wide notification of replies. 
+iOS 4chan broswer written in Swift. WebM/mp4 support. Full gallery view. Ability to mark posts as (you) and recieve system wide notification of replies. 
 
 Posting still sucks because of hCaptcha, use another broswer. 
 
