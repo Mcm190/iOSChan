@@ -200,8 +200,12 @@ struct ThreadView: View {
         .navigationTitle("/\(board.board)/")
         .onAppear {
             let key = "hasLoaded_\(board.board)"
-            if UserDefaults.standard.object(forKey: key) == nil {
+            // Always load if this instance has no data yet (first navigation)
+            if threads.isEmpty {
                 loadThreads()
+            }
+            // Preserve the original one-time marker for analytics/first-time behavior
+            if UserDefaults.standard.object(forKey: key) == nil {
                 UserDefaults.standard.set(true, forKey: key)
             }
         }

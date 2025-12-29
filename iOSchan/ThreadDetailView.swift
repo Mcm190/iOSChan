@@ -182,15 +182,6 @@ struct ThreadDetailView: View {
                         Button(action: { showGallery = true }) {
                             Label("Gallery", systemImage: "photo.on.rectangle.angled")
                         }
-                        Button(action: {
-                            if let last = posts.last?.no {
-                                scrollToPostNo = last
-                                showJumpToBottomToast = true
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { showJumpToBottomToast = false }
-                            }
-                        }) {
-                            Label("Jump to Bottom", systemImage: "arrow.down.to.line")
-                        }
                         Button(action: loadPosts) {
                             Label("Refresh", systemImage: "arrow.clockwise")
                         }
@@ -202,6 +193,15 @@ struct ThreadDetailView: View {
                         }
                         Button(action: toggleFavorite) {
                             Label(favoritesManager.isFavorite(boardID: boardID, threadNo: threadNo) ? "Unfavorite" : "Favorite", systemImage: favoritesManager.isFavorite(boardID: boardID, threadNo: threadNo) ? "star.fill" : "star")
+                        }
+                        Button(action: {
+                            if let last = posts.last?.no {
+                                scrollToPostNo = last
+                                showJumpToBottomToast = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { showJumpToBottomToast = false }
+                            }
+                        }) {
+                            Label("Jump to Bottom", systemImage: "arrow.down.to.line")
                         }
                     } label: {
                         Image(systemName: "ellipsis")
