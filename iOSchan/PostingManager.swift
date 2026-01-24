@@ -1,5 +1,10 @@
 import Foundation
 
+struct PostReceipt: Sendable {
+    let threadNo: Int?
+    let postNo: Int?
+}
+
 struct PostPayload {
     let boardID: String
     let threadNo: Int?
@@ -34,7 +39,22 @@ final class PostingManager {
 
     private init() {}
 
-    func submit(_ payload: PostPayload) async throws {
+    private final class RedirectCaptureDelegate: NSObject, URLSessionTaskDelegate {
+        var redirectURL: URL?
+
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest,
+            completionHandler: @escaping (URLRequest?) -> Void
+        ) {
+            redirectURL = request.url
+            completionHandler(nil) // stop here so we can parse Location reliably
+        }
+    }
+
+    func submit(_ payload: PostPayload) async throws -> PostReceipt {
         guard let token = payload.captchaToken, !token.isEmpty else { throw PostError.missingCaptcha }
 
         let url = URL(string: "https://sys.4chan.org/\(payload.boardID)/post")!
@@ -63,16 +83,31 @@ final class PostingManager {
         request.setValue("https://boards.4chan.org", forHTTPHeaderField: "Origin")
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let delegate = RedirectCaptureDelegate()
+            let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+            let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw PostError.invalidResponse }
 
             if (200..<400).contains(http.statusCode) {
+                let expectedThreadNo = payload.threadNo
+
+                if let redirectURL = delegate.redirectURL,
+                   let receipt = Self.inferReceipt(from: redirectURL.absoluteString, expectedThreadNo: expectedThreadNo)
+                {
+                    return receipt
+                }
+
                 if let html = String(data: data, encoding: .utf8) {
-                    if html.localizedCaseInsensitiveContains("error") || html.localizedCaseInsensitiveContains("ban") {
+                    if html.localizedCaseInsensitiveContains("error") || html.localizedCaseInsensitiveContains("banned") || html.localizedCaseInsensitiveContains("ban") {
                         throw PostError.serverMessage("Server responded with an error. Please verify your post and CAPTCHA.")
                     }
+                    if let receipt = Self.inferReceipt(from: html, expectedThreadNo: expectedThreadNo) {
+                        return receipt
+                    }
                 }
-                return
+
+                // Post succeeded, but we couldn't infer numbers (e.g. unexpected response shape).
+                return PostReceipt(threadNo: expectedThreadNo, postNo: nil)
             } else {
                 let msg = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
                 throw PostError.serverMessage(msg)
@@ -80,6 +115,49 @@ final class PostingManager {
         } catch {
             throw PostError.network(error)
         }
+    }
+
+    private static func inferReceipt(from text: String, expectedThreadNo: Int?) -> PostReceipt? {
+        let pattern = #"(?:/thread/|/res/)(\d+)(?:\.html)?(?:#p(\d+))?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+        let ns = text as NSString
+        let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        if matches.isEmpty { return nil }
+
+        struct Hit { let threadNo: Int; let postNo: Int? }
+        var hits: [Hit] = []
+        hits.reserveCapacity(matches.count)
+
+        for m in matches {
+            guard m.numberOfRanges >= 2 else { continue }
+            let threadStr = ns.substring(with: m.range(at: 1))
+            guard let threadNo = Int(threadStr) else { continue }
+
+            var postNo: Int?
+            if m.numberOfRanges >= 3, m.range(at: 2).location != NSNotFound {
+                let postStr = ns.substring(with: m.range(at: 2))
+                postNo = Int(postStr)
+            }
+
+            hits.append(Hit(threadNo: threadNo, postNo: postNo))
+        }
+
+        guard !hits.isEmpty else { return nil }
+
+        let chosen: Hit
+        if let expectedThreadNo, let match = hits.first(where: { $0.threadNo == expectedThreadNo }) {
+            chosen = match
+        } else {
+            chosen = hits.first!
+        }
+
+        var resolvedPostNo = chosen.postNo
+        if expectedThreadNo == nil, resolvedPostNo == nil {
+            // New thread: OP post no equals thread no.
+            resolvedPostNo = chosen.threadNo
+        }
+
+        return PostReceipt(threadNo: chosen.threadNo, postNo: resolvedPostNo)
     }
 
     private func buildMultipartBody(boundary: String, payload: PostPayload, token: String) async throws -> Data {

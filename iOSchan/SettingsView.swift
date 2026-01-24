@@ -6,24 +6,34 @@ struct SettingsView: View {
     var body: some View {
         NavigationView {
             List {
-                Section(header: Text("Appearance")) {
+                Section {
                     Picker("Theme", selection: $settings.colorScheme) {
                         ForEach(AppColorScheme.allCases, id: \.self) { scheme in
                             Text(scheme.title).tag(scheme)
                         }
                     }
                     .pickerStyle(.segmented)
+                } header: {
+                    Label("Appearance", systemImage: "paintbrush")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .textCase(nil)
                 }
 
-                Section(header: Text("Visibility")) {
+                Section {
                     Toggle("Show country flags", isOn: $settings.showFlags)
                     Toggle("Show poster IDs", isOn: $settings.showIDs)
                     Toggle("Show reply counts", isOn: $settings.showReplyCounts)
                     Toggle("Show image counts", isOn: $settings.showImageCounts)
                     Toggle("Highlight OP posts", isOn: $settings.highlightOP)
+                } header: {
+                    Label("Visibility", systemImage: "eye")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .textCase(nil)
                 }
 
-                Section(header: Text("Layout")) {
+                Section {
                     Picker("Density", selection: Binding(
                         get: { settings.densityIndex },
                         set: { settings.densityIndex = $0 }
@@ -34,20 +44,29 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
 
-                    HStack {
+                    VStack(alignment: .leading, spacing: 8) {
                         Text("Thumbnail size")
-                        Spacer()
+                            .font(.subheadline)
                         Slider(value: $settings.thumbnailScale, in: 0.6...1.4, step: 0.05)
+                            .tint(.accentColor)
                     }
+                    .padding(.vertical, 4)
 
-                    HStack {
-                        Text("Font fine-tune")
-                        Spacer()
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Font adjustment")
+                            .font(.subheadline)
                         Slider(value: $settings.fontFineTune, in: -1.0...1.0, step: 0.1)
+                            .tint(.accentColor)
                     }
+                    .padding(.vertical, 4)
+                } header: {
+                    Label("Layout", systemImage: "square.grid.2x2")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .textCase(nil)
                 }
 
-                Section(header: Text("Content Size")) {
+                Section {
                     Picker("Scale", selection: $settings.scale) {
                         ForEach(ContentScale.allCases, id: \.self) { scale in
                             Text(scale.title).tag(scale)
@@ -58,6 +77,7 @@ struct SettingsView: View {
                     HStack {
                         Text("XS")
                             .font(.caption2)
+                            .foregroundColor(.secondary)
                             .frame(width: 24)
                         Slider(value: Binding(
                             get: { Double(settings.scaleIndex) },
@@ -66,18 +86,23 @@ struct SettingsView: View {
                         .tint(.accentColor)
                         Text("N")
                             .font(.caption2)
+                            .foregroundColor(.secondary)
                             .frame(width: 24)
                     }
-                    .accessibilityLabel("Content size slider")
+                } header: {
+                    Label("Content Size", systemImage: "textformat.size")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .textCase(nil)
                 }
-                
-                Section(header: Text("Cache"), footer: Text("Clearing caches keeps Favorites intact. Use 'Clear All (including Favorites cache)' to remove cached data including dead-thread markers.")) {
+
+                Section {
                     Button(role: .destructive) {
                         Task {
                             do { try CacheManager.clearCaches() } catch { print("Cache clear error: \(error)") }
                         }
                     } label: {
-                        Label("Clear Cache (keep Favorites)", systemImage: "trash")
+                        Label("Clear Cache", systemImage: "trash")
                     }
 
                     Button(role: .destructive) {
@@ -90,10 +115,19 @@ struct SettingsView: View {
                             }
                         }
                     } label: {
-                        Label("Clear All (including Favorites cache)", systemImage: "trash.slash")
+                        Label("Clear All Data", systemImage: "trash.slash")
                     }
+                } header: {
+                    Label("Storage", systemImage: "internaldrive")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .textCase(nil)
+                } footer: {
+                    Text("Clearing cache keeps your favorites intact. Use 'Clear All Data' to also remove dead-thread markers.")
+                        .font(.caption)
                 }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("Settings")
         }
     }
@@ -102,4 +136,3 @@ struct SettingsView: View {
 #Preview {
     SettingsView()
 }
-

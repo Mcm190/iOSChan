@@ -5,15 +5,16 @@ import WebKit
 
 class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageHandler, WKUIDelegate {
     static let shared = CaptchaWebViewController()
-    static let sharedProcessPool = WKProcessPool()
     
     var webView: WKWebView!
     var currentSuccessCallback: ((String, String?) -> Void)?
     private var currentBoardID: String?
-    private var manualRefererBypass = Set<String>()
     private var warmedBoards = Set<String>()
     private var warmedHosts = Set<String>()
     private var pendingCaptchaURL: URL?
+    private var primeQueue: [URL] = []
+    private var isPriming = false
+    private var didPrimeHCaptcha = false
     
     override private init() {
         super.init()
@@ -22,7 +23,7 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
     
     private func setupWebView() {
         let config = WKWebViewConfiguration()
-        config.processPool = CaptchaWebViewController.sharedProcessPool
+//        config.processPool = CaptchaWebViewController.sharedProcessPool
         config.defaultWebpagePreferences.preferredContentMode = .mobile
         
         let prefs = WKPreferences()
@@ -34,6 +35,51 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
         
         let js = """
         (function() {
+            // Proactively request storage access for third-party frames (hCaptcha) to avoid CF loops
+            function tryRequestStorageAccessGestureBound() {
+                try {
+                    // Safari 17+: requestStorageAccessFor (best effort)
+                    if (typeof document.requestStorageAccessFor === 'function') {
+                        try { document.requestStorageAccessFor('https://hcaptcha.com').catch(function(){}); } catch(e) {}
+                        try { document.requestStorageAccessFor('https://newassets.hcaptcha.com').catch(function(){}); } catch(e) {}
+                        try { document.requestStorageAccessFor('https://assets.hcaptcha.com').catch(function(){}); } catch(e) {}
+                    }
+                    // Fallback: requestStorageAccess on gesture
+                    if (typeof document.requestStorageAccess === 'function') {
+                        try { document.requestStorageAccess().catch(function(){}); } catch(e) {}
+                    }
+                } catch (e) {}
+            }
+
+            function installGestureHandlers() {
+                var events = ['pointerdown', 'click', 'touchstart', 'keydown'];
+                events.forEach(function(ev){
+                    try {
+                        document.addEventListener(ev, function(e){
+                            // Only treat keydown for Space/Enter as a gesture
+                            if (ev === 'keydown') {
+                                var code = e.code || e.key || '';
+                                var ok = (code === 'Space' || code === 'Enter' || code === 'NumpadEnter');
+                                if (!ok) return;
+                            }
+                            tryRequestStorageAccessGestureBound();
+                        }, true);
+                    } catch (e) {}
+                });
+            }
+
+            try {
+                if (typeof document.hasStorageAccess === 'function') {
+                    document.hasStorageAccess().then(function(has) {
+                        if (!has) { tryRequestStorageAccessGestureBound(); }
+                    }).catch(function(){});
+                } else {
+                    tryRequestStorageAccessGestureBound();
+                }
+            } catch (e) {}
+
+            installGestureHandlers();
+
             function postTokenIfAvailable() {
                 try {
                     var tokenInput = document.querySelector('[name="h-captcha-response"], [name="g-recaptcha-response"]');
@@ -45,6 +91,7 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
                 } catch (e) {}
                 return false;
             }
+
             function hookHCaptcha() {
                 try {
                     if (window.hcaptcha && typeof window.hcaptcha.on === 'function') {
@@ -56,6 +103,7 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
                 } catch (e) {}
                 return false;
             }
+
             function hookFormSubmit() {
                 try {
                     var form = document.querySelector('form');
@@ -73,12 +121,15 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
                 } catch (e) {}
                 return false;
             }
+
             var attempts = 0;
             var iv = setInterval(function(){
                 attempts++;
                 var ok = postTokenIfAvailable() || hookHCaptcha() || hookFormSubmit();
-                if (ok || attempts > 120) { clearInterval(iv); }
+                if (ok || attempts > 200) { clearInterval(iv); }
             }, 250);
+
+            document.addEventListener('visibilitychange', function(){ if (!document.hidden) { postTokenIfAvailable(); hookHCaptcha(); } }, true);
         })();
         """
         let script = WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: false)
@@ -86,7 +137,7 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
         config.userContentController.add(self, name: "captchaHandler")
         
         webView = WKWebView(frame: .zero, configuration: config)
-        webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/121.0.6167.172 Mobile/15E148 Safari/604.1"
         webView.uiDelegate = self
         webView.navigationDelegate = self
         webView.isOpaque = true
@@ -125,6 +176,29 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
             }
         }
         
+        if !didPrimeHCaptcha && !isPriming {
+            pendingCaptchaURL = url
+            let store = webView.configuration.websiteDataStore.httpCookieStore
+            store.getAllCookies { cookies in
+                for c in cookies {
+                    if c.domain.contains("hcaptcha.com") { store.delete(c) }
+                }
+            }
+            primeQueue = [
+                URL(string: "https://hcaptcha.com/")!,
+                URL(string: "https://newassets.hcaptcha.com/")!,
+                URL(string: "https://assets.hcaptcha.com/")!
+            ]
+            isPriming = true
+            if let first = primeQueue.first {
+                primeQueue.removeFirst()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    self.webView.load(URLRequest(url: first))
+                }
+                return
+            }
+        }
+        
         if webView.url?.absoluteString != url.absoluteString {
             var request = URLRequest(url: url)
             // Referer is critical for 4chan/Cloudflare trust
@@ -144,6 +218,22 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
     }
     
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if let host = webView.url?.host {
+            if host == "hcaptcha.com" || host == "newassets.hcaptcha.com" || host == "assets.hcaptcha.com" {
+                if isPriming {
+                    if let next = primeQueue.first {
+                        primeQueue.removeFirst()
+                        webView.load(URLRequest(url: next))
+                        return
+                    } else {
+                        isPriming = false
+                        didPrimeHCaptcha = true
+                    }
+                } else {
+                    didPrimeHCaptcha = true
+                }
+            }
+        }
         // If we just finished loading the board page, proceed to captcha
         if let host = webView.url?.host, let board = currentBoardID {
             if host == "boards.4chan.org" {
@@ -157,7 +247,9 @@ class CaptchaWebViewController: NSObject, WKNavigationDelegate, WKScriptMessageH
                 pendingCaptchaURL = nil
                 var req = URLRequest(url: pending)
                 req.setValue("https://boards.4chan.org/\(board)/", forHTTPHeaderField: "Referer")
-                webView.load(req)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    webView.load(req)
+                }
                 return
             }
         }
@@ -198,21 +290,6 @@ extension CaptchaWebViewController {
         if let url = navigationAction.request.url {
             let urlString = url.absoluteString
             print("[NavAction] \(urlString)")
-            let host = url.host ?? ""
-            let path = url.path
-            let method = navigationAction.request.httpMethod ?? "GET"
-            // Only enforce Referer for the actual captcha endpoint (GET). Do not interfere with CF challenges.
-            let isCaptcha = (host == "sys.4chan.org" && (path.contains("/captcha") || path.contains("/hcaptcha")))
-            let hasReferer = navigationAction.request.value(forHTTPHeaderField: "Referer") != nil
-            if isCaptcha && method == "GET" && !hasReferer && manualRefererBypass.insert(urlString).inserted {
-                decisionHandler(.cancel)
-                var req = URLRequest(url: url)
-                let board = currentBoardID ?? ""
-                let referer = board.isEmpty ? "https://boards.4chan.org/" : "https://boards.4chan.org/\(board)/"
-                req.setValue(referer, forHTTPHeaderField: "Referer")
-                webView.load(req)
-                return
-            }
         }
         decisionHandler(.allow)
     }

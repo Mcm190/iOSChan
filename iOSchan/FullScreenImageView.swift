@@ -13,12 +13,16 @@ struct FullScreenImageView: View {
         let urlString = imageURL.absoluteString.lowercased()
         return urlString.contains(".webm") || urlString.contains(".mp4")
     }
+
+    var isWebP: Bool {
+        imageURL.pathExtension.lowercased() == "webp"
+    }
     
     var body: some View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
             
-            if isVideo {
+            if isVideo || isWebP {
                 WebView(url: imageURL)
                     .edgesIgnoringSafeArea(.all)
             } else {

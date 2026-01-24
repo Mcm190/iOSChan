@@ -23,14 +23,15 @@ struct ImageBrowser: View {
             Color.black.ignoresSafeArea()
 
             TabView(selection: $currentIndex) {
-                ForEach(media.indices, id: \ .self) { idx in
+                ForEach(media.indices, id: \.self) { idx in
                     let item = media[idx]
                     Group {
-                        if item.isVideo || item.isGif {
+                        let ext = item.fullURL.pathExtension.lowercased()
+                        if item.isVideo || item.isGif || ext == "webp" {
                             WebView(url: item.fullURL)
                                 .edgesIgnoringSafeArea(.all)
                         } else {
-                            AsyncImage(url: item.fullURL) { phase in
+                            HeaderAsyncImage(url: item.fullURL) { phase in
                                 switch phase {
                                 case .success(let image):
                                     ZoomableScrollView {
@@ -66,6 +67,7 @@ struct ImageBrowser: View {
                         }
                     }
 
+                    // Close
                     Button(action: { isPresented = false }) {
                         Image(systemName: "xmark")
                             .font(.headline).foregroundColor(.white)
@@ -75,6 +77,7 @@ struct ImageBrowser: View {
 
                     Spacer()
 
+                    // Save button
                     Button(action: { saveCurrentMedia() }) {
                         Image(systemName: "square.and.arrow.down")
                             .font(.headline).foregroundColor(.white)
@@ -128,6 +131,7 @@ struct ImageBrowser: View {
             do {
                 let (fileURL, _) = try await downloadToTemporaryFile(from: url)
 
+                // Create a dated folder in Documents similar to ThreadDetailView's format.
                 let dateFormatter = DateFormatter()
                 dateFormatter.dateFormat = "ddMMyyyy"
                 let dateString = dateFormatter.string(from: Date())

@@ -11,10 +11,14 @@ final class CaptchaStorage {
 struct PostComposerNative: View {
     let boardID: String
     let threadNo: Int?
+    let threadTitle: String?
+    let opTim: Int?
 
-    init(boardID: String, threadNo: Int?, initialComment: String? = nil) {
+    init(boardID: String, threadNo: Int?, threadTitle: String? = nil, opTim: Int? = nil, initialComment: String? = nil) {
         self.boardID = boardID
         self.threadNo = threadNo
+        self.threadTitle = threadTitle
+        self.opTim = opTim
         _comment = State(initialValue: initialComment ?? "")
     }
 
@@ -246,10 +250,36 @@ struct PostComposerNative: View {
                     captchaId: CaptchaStorage.shared.captchaId
                 )
 
-                try await PostingManager.shared.submit(payload)
+                let receipt = try await PostingManager.shared.submit(payload)
 
                 await MainActor.run {
                     CaptchaStorage.shared.captchaId = nil
+
+                    let resolvedThreadNo = receipt.threadNo ?? threadNo
+                    if let resolvedThreadNo, let postNo = receipt.postNo {
+                        let titleForYou: String? = {
+                            if let threadTitle, !threadTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                return threadTitle
+                            }
+                            if self.threadNo == nil {
+                                let sub = subject.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !sub.isEmpty { return sub }
+                                let com = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+                                return com.isEmpty ? nil : com
+                            }
+                            return nil
+                        }()
+
+                        YouPostsManager.shared.markYou(
+                            boardID: boardID,
+                            threadNo: resolvedThreadNo,
+                            postNo: postNo,
+                            threadTitle: titleForYou,
+                            tim: opTim,
+                            knownReplies: []
+                        )
+                    }
+
                     dismiss()
                 }
             } catch {

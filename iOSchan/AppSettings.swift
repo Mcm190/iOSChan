@@ -10,9 +10,9 @@ enum ContentScale: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .extraSmall: return "Extra Small (60%)"
-        case .small: return "Small (80%)"
-        case .normal: return "Normal (100%)"
+        case .extraSmall: return "Extra Small"
+        case .small: return "Small"
+        case .normal: return "Normal"
         }
     }
 
@@ -133,8 +133,6 @@ final class AppSettings: ObservableObject {
     }
 
     var adjustedDynamicType: DynamicTypeSize {
-        // Map base dynamicType with a small offset via fontFineTune
-        // We’ll adjust by stepping to neighboring sizes when needed.
         let base = dynamicType
         if fontFineTune <= -0.34 { return base.smaller() }
         if fontFineTune >= 0.34 { return base.larger() }

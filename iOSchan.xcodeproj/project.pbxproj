@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		7C114BCF2F123C27004FEC44 /* BoardColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C114BCE2F123C27004FEC44 /* BoardColors.swift */; };
+		7C114CC62F14DEE0004FEC44 /* ThreadDetailView+Compat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C114CC52F14DEE0004FEC44 /* ThreadDetailView+Compat.swift */; };
+		7C18B8482F0B8397003C8002 /* VichanBoardsAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C18B8472F0B8397003C8002 /* VichanBoardsAPI.swift */; };
+		7C18B84A2F0B8478003C8002 /* VichanCatalogAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C18B8492F0B8478003C8002 /* VichanCatalogAPI.swift */; };
+		7C18B84C2F0B8478003C8002 /* ExternalThreadListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C18B84B2F0B8478003C8002 /* ExternalThreadListView.swift */; };
 		7C6351142EF7DA8B00AB9F9F /* CacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C6351132EF7DA8B00AB9F9F /* CacheManager.swift */; };
 		7C6351162EF7DBD500AB9F9F /* MediaCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C6351152EF7DBD500AB9F9F /* MediaCacheManager.swift */; };
 		7CE638562EF8614900B3C046 /* BoardDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CE638552EF8614900B3C046 /* BoardDirectory.swift */; };
@@ -14,6 +19,11 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		7C114BCE2F123C27004FEC44 /* BoardColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardColors.swift; sourceTree = "<group>"; };
+		7C114CC52F14DEE0004FEC44 /* ThreadDetailView+Compat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ThreadDetailView+Compat.swift"; sourceTree = "<group>"; };
+		7C18B8472F0B8397003C8002 /* VichanBoardsAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VichanBoardsAPI.swift; sourceTree = "<group>"; };
+		7C18B8492F0B8478003C8002 /* VichanCatalogAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VichanCatalogAPI.swift; sourceTree = "<group>"; };
+		7C18B84B2F0B8478003C8002 /* ExternalThreadListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalThreadListView.swift; sourceTree = "<group>"; };
 		7C5010CE2EF6CBC500072401 /* iOSchan.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iOSchan.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7C6351132EF7DA8B00AB9F9F /* CacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CacheManager.swift; sourceTree = "<group>"; };
 		7C6351152EF7DBD500AB9F9F /* MediaCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaCacheManager.swift; sourceTree = "<group>"; };
@@ -62,6 +72,11 @@
 				7C6351152EF7DBD500AB9F9F /* MediaCacheManager.swift */,
 				7CE638552EF8614900B3C046 /* BoardDirectory.swift */,
 				7CE638612EF8702300B3C046 /* CookieBridge.swift */,
+				7C18B8472F0B8397003C8002 /* VichanBoardsAPI.swift */,
+				7C18B8492F0B8478003C8002 /* VichanCatalogAPI.swift */,
+				7C18B84B2F0B8478003C8002 /* ExternalThreadListView.swift */,
+				7C114BCE2F123C27004FEC44 /* BoardColors.swift */,
+				7C114CC52F14DEE0004FEC44 /* ThreadDetailView+Compat.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -151,6 +166,11 @@
 				7CE638562EF8614900B3C046 /* BoardDirectory.swift in Sources */,
 				7C6351162EF7DBD500AB9F9F /* MediaCacheManager.swift in Sources */,
 				7C6351142EF7DA8B00AB9F9F /* CacheManager.swift in Sources */,
+				7C18B84C2F0B8478003C8002 /* ExternalThreadListView.swift in Sources */,
+				7C114BCF2F123C27004FEC44 /* BoardColors.swift in Sources */,
+				7C114CC62F14DEE0004FEC44 /* ThreadDetailView+Compat.swift in Sources */,
+				7C18B84A2F0B8478003C8002 /* VichanCatalogAPI.swift in Sources */,
+				7C18B8482F0B8397003C8002 /* VichanBoardsAPI.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

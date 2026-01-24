@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 import Photos
 import UIKit
 
@@ -7,6 +8,7 @@ struct ThreadDetailView: View {
     let threadNo: Int
     // Indicates whether this thread was opened from an archived listing
     let isArchived: Bool
+    let isSFWOverride: Bool?
 
     @State private var posts: [Thread] = []
     @State private var selectedImageIndex: Int? = nil
@@ -21,13 +23,11 @@ struct ThreadDetailView: View {
 
     // Open in Safari (thread page for replying / posting)
     @State private var showSafariThread = false
-    @State private var showNativeComposer = false
-    @State private var composerInitialComment: String? = nil
+    @State private var showReplyComposer = false
 
     // Quote copy toast
     @State private var showQuoteCopiedToast = false
     @State private var quoteCopiedText = ""
-
     // Download Manager States
     @State private var isDownloadingAll = false
     @State private var downloadStatusMessage = ""
@@ -36,69 +36,64 @@ struct ThreadDetailView: View {
     @State private var downloadProgressTotal: Int = 0
     @State private var highlightedPostNo: Int? = nil
     @State private var repliesIndex: [Int: [Int]] = [:]
+    @State private var firstNewPostNo: Int? = nil
+    @State private var listProxy: ScrollViewProxy? = nil
     @Environment(\.openURL) private var openURL
     @ObservedObject private var settings = AppSettings.shared
-
-    @State private var lastReadPostNo: Int? = nil
-    @State private var showJumpToBottomToast = false
-    @State private var scrollToPostNo: Int? = nil
-    @State private var visiblePostNos: Set<Int> = []
-    @State private var lastMaxSeenPostNo: Int? = nil
-    @State private var hasVisitedBefore: Bool = false
 
     private var threadURL: URL {
         URL(string: "https://boards.4chan.org/\(boardID)/thread/\(threadNo)")!
     }
-
-    private var isSFWBoard: Bool { BoardDirectory.shared.isSFW(boardID: boardID) }
-    private var threadTint: Color { isSFWBoard ? .chanSFW : .chanNSFW }
+    
+    private var boardTheme: BoardColors.Theme { BoardColors.theme(for: boardID, isSFW: isSFWOverride) }
 
     var body: some View {
         ZStack {
             // Main list
             ScrollViewReader { proxy in
-                List(filteredPosts, id: \.no) { post in
-                    if isFirstNewPost(post.no) {
-                        NewPostsDivider()
-                            .listRowInsets(EdgeInsets())
+                List {
+                    ForEach(filteredPosts, id: \.no) { post in
+                        if post.no == firstNewPostNo {
+                            NewPostsDividerRow(accent: boardTheme.accent)
+                                .listRowInsets(EdgeInsets())
+                        }
+
+                        // Break complex expressions into locals to help the compiler
+                        let postReplies = repliesIndex[post.no] ?? []
+                        let isHighlighted = (highlightedPostNo == post.no)
+                        let isOP = post.no == (posts.first?.no ?? post.no)
+
+                        PostRowView(
+                            boardID: boardID,
+                            threadNo: threadNo,
+                            post: post,
+                            replies: postReplies,
+                            resolvePost: { no in posts.first(where: { $0.no == no }) },
+                                imageTapped: { url in
+                                    rebuildMediaList()
+                                    if let idx = mediaItems.firstIndex(where: { $0.fullURL == url }) {
+                                        selectedImageIndex = idx
+                                    }
+                                },
+                            highlighted: isHighlighted,
+                            copyQuote: { copyQuote($0) },
+                            attributedComment: { attributedComment(from: $0) },
+                            isOP: isOP
+                            , isArchived: isArchived
+                            , threadTitle: inferredThreadTitle
+                            , opTim: opTim
+                            , theme: boardTheme
+                        )
+                        .id(post.no)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                        .listRowBackground(boardTheme.surface)
                     }
-
-                    let postReplies = repliesIndex[post.no] ?? []
-                    let isHighlighted = (highlightedPostNo == post.no)
-                    let isOP = post.no == (posts.first?.no ?? post.no)
-                    let opPost = posts.first
-                    let threadTitle = opPost?.sub ?? cleanHTML(opPost?.com ?? "Thread \(threadNo)")
-
-                    PostRowView(
-                        boardID: boardID,
-                        threadNo: threadNo,
-                        threadTitle: threadTitle,
-                        threadTim: opPost?.tim,
-                        post: post,
-                        replies: postReplies,
-                        postLookup: { no in posts.first(where: { $0.no == no }) },
-                        imageTapped: { url in
-                            rebuildMediaList()
-                            if let idx = mediaItems.firstIndex(where: { $0.fullURL == url }) {
-                                selectedImageIndex = idx
-                            }
-                        },
-                        highlighted: isHighlighted,
-                        copyQuote: { copyQuote($0) },
-                        attributedComment: { attributedComment(from: $0) },
-                        isOP: isOP
-                        , isArchived: isArchived
-                    )
-                    .id(post.no)
-                    .listRowBackground(threadTint.opacity(0.20))
-                    .onAppear { visiblePostNos.insert(post.no) }
-                    .onDisappear { visiblePostNos.remove(post.no) }
                 }
                 .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .onAppear { listProxy = proxy }
                 .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: isSearchVisible ? .always : .automatic), prompt: "Search posts")
                 .focused($isSearchFieldFocused)
-                .scrollContentBackground(.hidden)
-                .background(threadTint.opacity(0.12))
                 .environment(\.openURL, OpenURLAction { url in
                     if url.scheme == "quote",
                        let host = url.host,
@@ -113,46 +108,22 @@ struct ThreadDetailView: View {
                             }
                         }
                         return .handled
-                    } else if url.scheme == "reply",
-                              let host = url.host,
-                              let targetNo = Int(host) {
-                        composerInitialComment = ">>\(targetNo)\n"
-                        showNativeComposer = true
-                        return .handled
                     }
                     return .systemAction
                 })
-                .onAppear {
-                    hasVisitedBefore = HistoryManager.shared.history.contains(where: { $0.boardID == boardID && $0.threadNo == threadNo })
-                    loadPosts()
-                    if let savedTop = ThreadReadState.shared.lastTopPostNo(boardID: boardID, threadNo: threadNo) {
-                        lastReadPostNo = savedTop
-                    }
-                    lastMaxSeenPostNo = ThreadReadState.shared.lastMaxPostNo(boardID: boardID, threadNo: threadNo)
-                }
-                .onChange(of: posts.count) { _ in
-                    buildRepliesIndex()
-                    rebuildMediaList()
-                    YouPostsManager.shared.clearUnreadForThread(boardID: boardID, threadNo: threadNo)
-                    if hasVisitedBefore, let target = lastReadPostNo, posts.contains(where: { $0.no == target }) {
-                        DispatchQueue.main.async {
-                            withAnimation { proxy.scrollTo(target, anchor: .top) }
-                        }
-                    }
-                }
-                .onChange(of: scrollToPostNo) { target in
-                    if let target = target {
-                        withAnimation { proxy.scrollTo(target, anchor: .bottom) }
-                        scrollToPostNo = nil
-                    }
-                }
-
             }
             .navigationTitle("Thread \(threadNo.formatted(.number.grouping(.never)))")
+                .onAppear { loadPosts() }
+            .onChange(of: posts.count) { _ in
+                buildRepliesIndex()
+                rebuildMediaList()
+            }
 
+            // Image Browser
             .sheet(isPresented: Binding(get: { selectedImageIndex != nil }, set: { if !$0 { selectedImageIndex = nil } })) {
                 if let idx = selectedImageIndex {
                     ImageBrowser(media: mediaItems, currentIndex: idx, isPresented: Binding(get: { selectedImageIndex != nil }, set: { if !$0 { selectedImageIndex = nil } }), onBack: {
+                        // Close browser and re-open gallery
                         selectedImageIndex = nil
                         showGallery = true
                     })
@@ -168,6 +139,7 @@ struct ThreadDetailView: View {
                 })
             }
 
+            // Toolbar Actions: collapsed into ellipsis menu
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
@@ -182,26 +154,27 @@ struct ThreadDetailView: View {
                         Button(action: { showGallery = true }) {
                             Label("Gallery", systemImage: "photo.on.rectangle.angled")
                         }
+                        if firstNewPostNo != nil {
+                            Button(action: jumpToNewPosts) {
+                                Label("Jump to New Posts", systemImage: "arrow.down.to.line")
+                            }
+                        }
                         Button(action: loadPosts) {
                             Label("Refresh", systemImage: "arrow.clockwise")
                         }
-                        Button(action: { showNativeComposer = true }) {
-                            Label("Reply", systemImage: "arrowshape.turn.up.left.fill")
+                        if !isArchived {
+                            Button(action: { showReplyComposer = true }) {
+                                Label("Reply", systemImage: "arrowshape.turn.up.left.fill")
+                            }
+                        }
+                        Button(action: { showSafariThread = true }) {
+                            Label("Open in Safari", systemImage: "safari")
                         }
                         Button(action: downloadAllImagesToFiles) {
                             Label("Download All", systemImage: "arrow.down.circle.fill")
                         }
                         Button(action: toggleFavorite) {
                             Label(favoritesManager.isFavorite(boardID: boardID, threadNo: threadNo) ? "Unfavorite" : "Favorite", systemImage: favoritesManager.isFavorite(boardID: boardID, threadNo: threadNo) ? "star.fill" : "star")
-                        }
-                        Button(action: {
-                            if let last = posts.last?.no {
-                                scrollToPostNo = last
-                                showJumpToBottomToast = true
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { showJumpToBottomToast = false }
-                            }
-                        }) {
-                            Label("Jump to Bottom", systemImage: "arrow.down.to.line")
                         }
                     } label: {
                         Image(systemName: "ellipsis")
@@ -211,6 +184,7 @@ struct ThreadDetailView: View {
                 }
             }
 
+            // Download progress overlay
             if isDownloadingAll {
                 Color.black.opacity(0.4).edgesIgnoringSafeArea(.all)
                 VStack(spacing: 12) {
@@ -228,13 +202,17 @@ struct ThreadDetailView: View {
                 .shadow(radius: 10)
             }
         }
-        .background(threadTint.opacity(0.12))
+        .background(boardTheme.background)
+        .toolbarBackground(boardTheme.surface.opacity(0.6), for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        // Open thread in Safari (for replying / posting)
         .sheet(isPresented: $showSafariThread) {
             SafariView(url: threadURL)
         }
-        .sheet(isPresented: $showNativeComposer) {
-            PostComposerNative(boardID: boardID, threadNo: threadNo, initialComment: composerInitialComment)
+        .sheet(isPresented: $showReplyComposer, onDismiss: { loadPosts() }) {
+            PostComposerNative(boardID: boardID, threadNo: threadNo, threadTitle: inferredThreadTitle, opTim: opTim)
         }
+        // Quote copied toast overlay
         .overlay(alignment: .top) {
             if showQuoteCopiedToast {
                 Text("Copied \(quoteCopiedText)")
@@ -247,58 +225,28 @@ struct ThreadDetailView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .overlay(alignment: .top) {
-            if showJumpToBottomToast {
-                Text("Jumped to bottom")
-                    .font(.caption.bold())
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 12)
-                    .background(.ultraThinMaterial)
-                    .clipShape(Capsule())
-                    .padding(.top, 44)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
         .animation(.easeInOut(duration: 0.2), value: showQuoteCopiedToast)
-        .animation(.easeInOut(duration: 0.2), value: showJumpToBottomToast)
         .environment(\.dynamicTypeSize, settings.adjustedDynamicType)
+
+        // Alerts
         .alert("Download Complete", isPresented: $showDownloadAlert) {
             Button("OK", role: .cancel) { }
         } message: {
             Text(downloadStatusMessage)
         }
-        .onDisappear {
-            if let top = topVisiblePostNo() {
-                ThreadReadState.shared.setLastTopPostNo(boardID: boardID, threadNo: threadNo, postNo: top)
-            }
-            if let latest = posts.last?.no {
-                ThreadReadState.shared.setLastMaxPostNo(boardID: boardID, threadNo: threadNo, postNo: latest)
-            }
-        }
     }
 
+    // MARK: - Helpers
 
-    private func isFirstNewPost(_ postNo: Int) -> Bool {
-        guard let last = lastMaxSeenPostNo else { return false }
-        guard let idx = posts.firstIndex(where: { $0.no == postNo }),
-              let lastIdx = posts.firstIndex(where: { $0.no == last }) else { return false }
-        return idx == lastIdx + 1
+    private var inferredThreadTitle: String? {
+        guard let first = posts.first else { return nil }
+        let subject = (first.sub ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !subject.isEmpty { return cleanHTML(subject) }
+        let comment = cleanHTML(first.com ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return comment.isEmpty ? nil : comment
     }
 
-    private func topVisiblePostNo() -> Int? {
-        guard !visiblePostNos.isEmpty else { return nil }
-        var bestNo: Int?
-        var bestIdx: Int?
-        for no in visiblePostNos {
-            if let idx = posts.firstIndex(where: { $0.no == no }) {
-                if bestIdx == nil || idx < bestIdx! {
-                    bestIdx = idx
-                    bestNo = no
-                }
-            }
-        }
-        return bestNo
-    }
+    private var opTim: Int? { posts.first?.tim }
 
     func copyQuote(_ postNo: Int) {
         let quote = ">>\(postNo)"
@@ -323,28 +271,41 @@ struct ThreadDetailView: View {
             switch result {
             case .success(let fetchedPosts):
                 DispatchQueue.main.async {
+                    let replyCount = max(0, fetchedPosts.count - 1)
+                    let historyLast = historyManager.history.first(where: { $0.siteID == "4chan" && $0.boardID == boardID && $0.threadNo == threadNo })?.lastReplyCount
+                    let favLast = favoritesManager.favorites.first(where: { $0.siteID == "4chan" && $0.boardID == boardID && $0.threadNo == threadNo })?.lastReplyCount
+                    let lastSeen = [historyLast, favLast].compactMap { $0 }.max() ?? replyCount
+                    if replyCount > lastSeen, fetchedPosts.indices.contains(lastSeen + 1) {
+                        firstNewPostNo = fetchedPosts[lastSeen + 1].no
+                    } else {
+                        firstNewPostNo = nil
+                    }
+
                     self.posts = fetchedPosts
                     self.buildRepliesIndex()
 
-                    let replyCount = max(0, fetchedPosts.count - 1)
+                    // ✅ NEW: clear unread + update lastReplyCount when viewing the thread
                     FavoritesManager.shared.markSeen(
                         boardID: boardID,
                         threadNo: threadNo,
                         replyCount: replyCount
                     )
 
-                    HistoryManager.shared.add(boardID: boardID, threadNo: threadNo, title: fetchedPosts.first?.sub ?? cleanHTML(fetchedPosts.first?.com ?? "Thread \(threadNo)"), tim: fetchedPosts.first?.tim)
-                    HistoryManager.shared.markSeen(boardID: boardID, threadNo: threadNo, replyCount: replyCount)
-
-                    rebuildMediaList()
+                    // Clear (You) unread counters for this thread when viewing it.
                     YouPostsManager.shared.clearUnreadForThread(boardID: boardID, threadNo: threadNo)
 
-                    self.lastReadPostNo = ThreadReadState.shared.lastTopPostNo(boardID: boardID, threadNo: threadNo)
-                    self.lastMaxSeenPostNo = ThreadReadState.shared.lastMaxPostNo(boardID: boardID, threadNo: threadNo)
+                    // Record to history (use OP title or first comment)
+                    let firstPost = fetchedPosts.first
+                    let title = firstPost?.sub ?? cleanHTML(firstPost?.com ?? "Thread \(threadNo)")
+                    HistoryManager.shared.add(boardID: boardID, threadNo: threadNo, title: title, tim: firstPost?.tim, replyCount: replyCount)
+
+                    // Rebuild media list for gallery/browser
+                    rebuildMediaList()
                 }
 
             case .failure(let error):
                 DispatchQueue.main.async {
+                    // Only mark dead when API explicitly reports 404
                     if let apiErr = error as? APIError, case .notFound = apiErr {
                         FavoritesManager.shared.markDead(boardID: boardID, threadNo: threadNo)
                         HistoryManager.shared.markDead(boardID: boardID, threadNo: threadNo)
@@ -365,10 +326,15 @@ struct ThreadDetailView: View {
             .replacingOccurrences(of: "&amp;", with: "&")
     }
 
+    // Build media item list for the current posts (includes images and videos)
     func rebuildMediaList() {
         mediaItems = posts.compactMap { post in
-            if let tim = post.tim {
-                return MediaItem(board: boardID, tim: tim, ext: post.ext)
+            guard let tim = post.tim else { return nil }
+            let fileExt = post.ext ?? ".jpg"
+            let fullURL = URL(string: "https://i.4cdn.org/\(boardID)/\(tim)\(fileExt)")
+            let thumbURL = URL(string: "https://i.4cdn.org/\(boardID)/\(tim)s.jpg")
+            if let fullURL, let thumbURL {
+                return MediaItem(fullURL: fullURL, thumbURL: thumbURL)
             }
             return nil
         }
@@ -378,74 +344,53 @@ struct ThreadDetailView: View {
         let cleaned = cleanHTML(raw)
         var result = AttributedString()
 
-        let quotePattern = #">>(\d+)"#
-        let quoteRegex = try? NSRegularExpression(pattern: quotePattern, options: [])
-        let urlRegex = try? NSRegularExpression(pattern: #"https?:\/\/[^\s]+"#, options: [])
+        let linkPattern = #">>(\d+)"#
+        let linkRegex = try? NSRegularExpression(pattern: linkPattern, options: [])
+        let urlDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
         let lines = cleaned.components(separatedBy: "\n")
 
         for (index, line) in lines.enumerated() {
+            // Greentext: line starts with '>' but not '>>'
             let isGreentext = line.hasPrefix(">") && !line.hasPrefix(">>")
 
             let nsLine = line as NSString
-            let length = nsLine.length
-
-            var events: [(range: NSRange, kind: String, payload: String?)] = []
-
-            if let qrx = quoteRegex {
-                let matches = qrx.matches(in: line, options: [], range: NSRange(location: 0, length: length))
-                for m in matches where m.numberOfRanges >= 2 {
-                    let full = m.range
-                    let numRange = m.range(at: 1)
-                    let numStr = nsLine.substring(with: numRange)
-                    events.append((full, "quote", numStr))
-                }
-            }
-
-            if let urx = urlRegex {
-                let matches = urx.matches(in: line, options: [], range: NSRange(location: 0, length: length))
-                for m in matches {
-                    let full = m.range
-                    let urlStr = nsLine.substring(with: full)
-                    events.append((full, "url", urlStr))
-                }
-            }
-
-            events.sort { $0.range.location < $1.range.location }
-
+            let matches = linkRegex?.matches(in: line, options: [], range: NSRange(location: 0, length: nsLine.length)) ?? []
             var currentLocation = 0
-            for ev in events {
-                let r = ev.range
-                if r.location > currentLocation {
-                    let beforeRange = NSRange(location: currentLocation, length: r.location - currentLocation)
-                    var before = AttributedString(nsLine.substring(with: beforeRange))
-                    if isGreentext { before.foregroundColor = .green }
-                    result.append(before)
+
+            for match in matches {
+                let range = match.range
+                // Append text before the match
+                if range.location > currentLocation {
+                    let beforeRange = NSRange(location: currentLocation, length: range.location - currentLocation)
+                    let beforeText = nsLine.substring(with: beforeRange)
+                    result.append(linkifyPlainText(beforeText, detector: urlDetector, defaultColor: isGreentext ? .green : nil))
                 }
 
-                let segmentStr = nsLine.substring(with: r)
-                var segment = AttributedString(segmentStr)
-                switch ev.kind {
-                case "quote":
-                    if let target = ev.payload, let u = URL(string: "quote://\(target)") { segment.link = u }
-                case "url":
-                    if let s = ev.payload, let u = URL(string: s) { segment.link = u }
-                default:
-                    break
+                // Append the link segment (>>12345)
+                if match.numberOfRanges >= 2 {
+                    let numberRange = match.range(at: 1)
+                    let numberStr = nsLine.substring(with: numberRange)
+                    var linkPart = AttributedString(nsLine.substring(with: range))
+                    linkPart.link = URL(string: "quote://\(numberStr)")
+                    linkPart.foregroundColor = .blue
+                    result.append(linkPart)
+                } else {
+                    let partText = nsLine.substring(with: range)
+                    result.append(linkifyPlainText(partText, detector: urlDetector, defaultColor: isGreentext ? .green : nil))
                 }
-                if isGreentext { segment.foregroundColor = .green }
-                result.append(segment)
 
-                currentLocation = r.location + r.length
+                currentLocation = range.location + range.length
             }
 
-            if currentLocation < length {
-                let tailRange = NSRange(location: currentLocation, length: length - currentLocation)
-                var tail = AttributedString(nsLine.substring(with: tailRange))
-                if isGreentext { tail.foregroundColor = .green }
-                result.append(tail)
+            // Append the tail after the last match
+            if currentLocation < nsLine.length {
+                let tailRange = NSRange(location: currentLocation, length: nsLine.length - currentLocation)
+                let tailText = nsLine.substring(with: tailRange)
+                result.append(linkifyPlainText(tailText, detector: urlDetector, defaultColor: isGreentext ? .green : nil))
             }
 
+            // Re-insert newline separators (except after last line)
             if index < lines.count - 1 {
                 result.append(AttributedString("\n"))
             }
@@ -454,7 +399,59 @@ struct ThreadDetailView: View {
         return result
     }
 
+    private func linkifyPlainText(_ text: String, detector: NSDataDetector?, defaultColor: Color?) -> AttributedString {
+        guard let detector else {
+            var out = AttributedString(text)
+            if let defaultColor { out.foregroundColor = defaultColor }
+            return out
+        }
+
+        let ns = text as NSString
+        let matches = detector.matches(in: text, options: [], range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else {
+            var out = AttributedString(text)
+            if let defaultColor { out.foregroundColor = defaultColor }
+            return out
+        }
+
+        var result = AttributedString()
+        var currentLocation = 0
+
+        for m in matches {
+            guard let url = m.url else { continue }
+            let range = m.range
+            if range.location > currentLocation {
+                let beforeRange = NSRange(location: currentLocation, length: range.location - currentLocation)
+                var before = AttributedString(ns.substring(with: beforeRange))
+                if let defaultColor { before.foregroundColor = defaultColor }
+                result.append(before)
+            }
+
+            var linkPart = AttributedString(ns.substring(with: range))
+            linkPart.link = url
+            linkPart.foregroundColor = .blue
+            result.append(linkPart)
+
+            currentLocation = range.location + range.length
+        }
+
+        if currentLocation < ns.length {
+            let tailRange = NSRange(location: currentLocation, length: ns.length - currentLocation)
+            var tail = AttributedString(ns.substring(with: tailRange))
+            if let defaultColor { tail.foregroundColor = defaultColor }
+            result.append(tail)
+        }
+
+        return result
+    }
+
+    private func jumpToNewPosts() {
+        guard let target = firstNewPostNo else { return }
+        withAnimation { listProxy?.scrollTo(target, anchor: .top) }
+    }
+
     func buildRepliesIndex() {
+        // Build a reverse index: targetPostNo -> [replyingPostNos]
         var temp: [Int: Set<Int>] = [:]
         let pattern = #">>(\d+)"#
         let regex = try? NSRegularExpression(pattern: pattern, options: [])
@@ -493,6 +490,7 @@ struct ThreadDetailView: View {
         }
     }
 
+    // Filter posts by `searchText` (case-insensitive)
     var filteredPosts: [Thread] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return posts }
@@ -503,6 +501,7 @@ struct ThreadDetailView: View {
         }
     }
 
+    // MARK: - Download Logic
 
     func downloadAllImagesToFiles() {
         isDownloadingAll = true
@@ -596,28 +595,33 @@ struct ThreadDetailView: View {
 struct PostRowView: View {
     let boardID: String
     let threadNo: Int
-    let threadTitle: String?
-    let threadTim: Int?
     let post: Thread
     let replies: [Int]
-    let postLookup: (Int) -> Thread?
+    let resolvePost: (Int) -> Thread?
     let imageTapped: (URL) -> Void
     let highlighted: Bool
     let copyQuote: (Int) -> Void
     let attributedComment: (String) -> AttributedString
     let isOP: Bool
     let isArchived: Bool
+    let threadTitle: String?
+    let opTim: Int?
+    let theme: BoardColors.Theme
     @Environment(\.openURL) private var openURL
-    @ObservedObject private var settings = AppSettings.shared
-    @ObservedObject private var youManager = YouPostsManager.shared
     @State private var showRepliesPopover = false
+    @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var youPostsManager = YouPostsManager.shared
 
     var body: some View {
+        let highlightColor: Color? = highlighted
+            ? Color.yellow.opacity(0.15)
+            : ((settings.highlightOP && isOP) ? theme.highlight.opacity(0.12) : nil)
+
         HStack(alignment: .top, spacing: 10) {
             if let tim = post.tim {
                 let fileExt = post.ext ?? ".jpg"
                 let thumbURL = URL(string: "https://i.4cdn.org/\(boardID)/\(tim)s.jpg")
-                let fullURL  = URL(string: "https://i.4cdn.org/\(boardID)/\(tim)\(fileExt)")
+                let fullURL = URL(string: "https://i.4cdn.org/\(boardID)/\(tim)\(fileExt)")
 
                 if let url = thumbURL {
                     AsyncImage(url: url) { phase in
@@ -628,10 +632,19 @@ struct PostRowView: View {
                         }
                     }
                     .frame(width: CGFloat(60) * settings.thumbnailScale, height: CGFloat(60) * settings.thumbnailScale)
-                    .cornerRadius(4)
+                    .cornerRadius(6)
                     .clipped()
                     .onTapGesture {
                         if let fu = fullURL { imageTapped(fu) }
+                    }
+                    .contextMenu {
+                        if fileExt != ".webm" && fileExt != ".mp4" {
+                            Button {
+                                saveImageToPhotoLibrary(from: fullURL)
+                            } label: {
+                                Label("Save Image", systemImage: "photo")
+                            }
+                        }
                     }
                     .overlay(alignment: .bottomTrailing) {
                         if fileExt == ".webm" || fileExt == ".mp4" {
@@ -648,29 +661,60 @@ struct PostRowView: View {
             }
 
             VStack(alignment: .leading, spacing: 4 * settings.density.spacingMultiplier) {
+                // Subject at the very top of the post content
+                if let subject = post.sub?.trimmingCharacters(in: .whitespacesAndNewlines), !subject.isEmpty {
+                    Text(cleanHTML(subject))
+                        .font(.headline.weight(.bold))
+                        .foregroundColor(theme.text)
+                        .lineLimit(2)
+                }
+
+                // Metadata row (name, No., time, replies)
                 HStack(alignment: .firstTextBaseline, spacing: 8 * settings.density.spacingMultiplier) {
                     Text(post.name ?? "Anonymous")
                         .font(.caption)
                         .bold()
-                        .foregroundColor(.red)
+                        .foregroundColor(theme.accent)
 
                     Text("No. \(post.no.formatted(.number.grouping(.never)))")
                         .font(.caption)
-                        .foregroundColor(.gray)
-                        .onTapGesture { copyQuote(post.no) }
-                    if youManager.isYou(boardID: boardID, threadNo: threadNo, postNo: post.no) {
+                        .foregroundColor(theme.text.opacity(0.7))
+                        .contentShape(Rectangle())
+                        .contextMenu {
+                            Button { copyQuote(post.no) } label: {
+                                Label("Copy Quote", systemImage: "doc.on.doc")
+                            }
+                            Button {
+                                youPostsManager.toggleYou(
+                                    boardID: boardID,
+                                    threadNo: threadNo,
+                                    postNo: post.no,
+                                    threadTitle: threadTitle,
+                                    tim: opTim,
+                                    knownReplies: replies
+                                )
+                            } label: {
+                                let isYou = youPostsManager.isYou(boardID: boardID, threadNo: threadNo, postNo: post.no)
+                                Label(isYou ? "Unmark (You)" : "Mark (You)", systemImage: isYou ? "person.fill.badge.minus" : "person.fill.badge.plus")
+                            }
+                        }
+
+                    if youPostsManager.isYou(boardID: boardID, threadNo: threadNo, postNo: post.no) {
                         Text("(You)")
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(.blue)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(theme.accent)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(theme.accent.opacity(0.15))
+                            .clipShape(Capsule())
                     }
 
                     if settings.showIDs, let pid = post.posterID {
                         Text("ID: \(pid)")
                             .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(theme.text.opacity(0.65))
                     }
                     if settings.showFlags, let cc = post.country {
-                        // 4chan uses 2-letter country codes; display as regional flag emoji when possible
                         Text(flagEmoji(for: cc))
                             .font(.caption)
                     }
@@ -687,65 +731,136 @@ struct PostRowView: View {
                             Button { showRepliesPopover = true } label: {
                                 let count = replies.count
                                 Text("\(count) repl\(count == 1 ? "y" : "ies")")
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(theme.accent)
                             }
                             .buttonStyle(.borderless)
                             .popover(isPresented: $showRepliesPopover, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("Replies to No. \(post.no.formatted(.number.grouping(.never)))")
                                         .font(.caption.bold())
-                                        .foregroundColor(.secondary)
+                                        .foregroundColor(theme.text.opacity(0.7))
                                     Divider()
                                     ScrollView {
-                                        VStack(alignment: .leading, spacing: 8) {
+                                        VStack(alignment: .leading, spacing: 12) {
                                             ForEach(replies, id: \.self) { replyNo in
-                                                if let replyPost = postLookup(replyNo) {
-                                                    ReplyPreviewRow(
-                                                        boardID: boardID,
-                                                        post: replyPost,
-                                                        attributedComment: attributedComment,
-                                                        onTap: {
-                                                            showRepliesPopover = false
-                                                            if let url = URL(string: "quote://\(replyNo)") { _ = openURL(url) }
+                                                Button {
+                                                    showRepliesPopover = false
+                                                    if let url = URL(string: "quote://\(replyNo)") { _ = openURL(url) }
+                                                } label: {
+                                                    if let rp = resolvePost(replyNo) {
+                                                        HStack(alignment: .top, spacing: 10) {
+                                                            if let tim = rp.tim {
+                                                                let fileExt = rp.ext ?? ".jpg"
+                                                                let thumbURL = URL(string: "https://i.4cdn.org/\(boardID)/\(tim)s.jpg")
+                                                                if let url = thumbURL {
+                                                                    AsyncImage(url: url) { phase in
+                                                                        if let image = phase.image {
+                                                                            image.resizable().scaledToFill()
+                                                                        } else {
+                                                                            Color.gray.opacity(0.3)
+                                                                        }
+                                                                    }
+                                                                    .frame(width: CGFloat(60) * settings.thumbnailScale, height: CGFloat(60) * settings.thumbnailScale)
+                                                                    .cornerRadius(6)
+                                                                    .clipped()
+                                                                    .overlay(alignment: .bottomTrailing) {
+                                                                        if fileExt == ".webm" || fileExt == ".mp4" {
+                                                                            Image(systemName: "video.fill")
+                                                                                .font(.caption2)
+                                                                                .foregroundColor(.white)
+                                                                                .padding(4)
+                                                                                .background(Color.black.opacity(0.6))
+                                                                                .cornerRadius(4)
+                                                                                .padding(2)
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            VStack(alignment: .leading, spacing: 6) {
+                                                                Text(">>\(replyNo.formatted(.number.grouping(.never)))")
+                                                                    .font(.caption.bold())
+                                                                    .foregroundColor(theme.accent)
+
+                                                                if let subject = rp.sub?.trimmingCharacters(in: .whitespacesAndNewlines), !subject.isEmpty {
+                                                                    Text(cleanHTML(subject))
+                                                                        .font(.headline.weight(.bold))
+                                                                        .foregroundColor(theme.text)
+                                                                }
+
+                                                                HStack(alignment: .firstTextBaseline, spacing: 8 * settings.density.spacingMultiplier) {
+                                                                    Text(rp.name ?? "Anonymous")
+                                                                        .font(.caption)
+                                                                        .bold()
+                                                                        .foregroundColor(theme.accent)
+
+                                                                    Text("No. \(rp.no.formatted(.number.grouping(.never)))")
+                                                                        .font(.caption)
+                                                                        .foregroundColor(theme.text.opacity(0.7))
+
+                                                                    Spacer()
+
+                                                                    HStack(spacing: 4) {
+                                                                        Image(systemName: "clock")
+                                                                        Text(Date(timeIntervalSince1970: TimeInterval(rp.time)), style: .relative)
+                                                                    }
+                                                                    .font(.caption)
+                                                                    .foregroundColor(theme.text.opacity(0.65))
+                                                                }
+
+                                                                if let filename = rp.filename, let fsize = rp.fsize, let ext = rp.ext {
+                                                                    Text("\(filename)\(ext) • \(formatFileSize(fsize))")
+                                                                        .font(.system(size: 10))
+                                                                        .foregroundColor(theme.text.opacity(0.65))
+                                                                        .lineLimit(1)
+                                                                        .allowsHitTesting(false)
+                                                                }
+
+                                                                if let com = rp.com {
+                                                                    Text(attributedComment(com))
+                                                                        .font(.body)
+                                                                        .fixedSize(horizontal: false, vertical: true)
+                                                                }
+                                                            }
                                                         }
-                                                    )
-                                                } else {
-                                                    Button {
-                                                        showRepliesPopover = false
-                                                        if let url = URL(string: "quote://\(replyNo)") { _ = openURL(url) }
-                                                    } label: {
-                                                        Text(">>\(replyNo.formatted(.number.grouping(.never)))")
-                                                            .font(.body)
-                                                            .foregroundColor(.blue)
+                                                        .padding(.vertical, 8)
+                                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                                    } else {
+                                                        VStack(alignment: .leading, spacing: 4) {
+                                                            Text(">>\(replyNo.formatted(.number.grouping(.never)))")
+                                                                .font(.caption.bold())
+                                                                .foregroundColor(theme.accent)
+                                                            Text("Post unavailable")
+                                                                .font(.caption)
+                                                                .foregroundColor(.secondary)
+                                                        }
+                                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                                        .padding(.vertical, 8)
                                                     }
-                                                    .buttonStyle(.plain)
                                                 }
+                                                .buttonStyle(.plain)
+
+                                                Divider()
                                             }
                                         }
                                         .padding(.vertical, 4)
                                     }
+                                    .frame(maxHeight: .infinity)
                                 }
                                 .padding(12)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(maxWidth: 420, alignment: .leading)
+                                .frame(maxHeight: .infinity, alignment: .topLeading)
                             }
                         }
                     }
                     .font(.caption)
-                    .foregroundColor(.secondary)
-                }
-
-                if let sub = post.sub {
-                    Text(sub)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.primary)
-                        .lineLimit(nil)
-                        .fixedSize(horizontal: false, vertical: true)
+                    .foregroundColor(theme.text.opacity(0.65))
                 }
 
                 if let filename = post.filename, let fsize = post.fsize, let ext = post.ext {
                     Text("\(filename)\(ext) • \(formatFileSize(fsize))")
                         .font(.system(size: 10))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(theme.text.opacity(0.65))
                         .lineLimit(1)
                         .allowsHitTesting(false)
                 }
@@ -753,32 +868,39 @@ struct PostRowView: View {
                 if let comment = post.com {
                     Text(attributedComment(comment))
                         .font(.body)
-                        .textSelection(.enabled)
-                        .lineLimit(nil)
                         .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 if isArchived {
                     Text("Archived")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(theme.text.opacity(0.65))
                         .padding(.top, 4)
                 }
             }
         }
+        .padding(.vertical, 6 * settings.density.spacingMultiplier)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(highlightColor ?? Color.clear)
+        .contentShape(Rectangle())
         .contextMenu {
-            let isMarked = youManager.isYou(boardID: boardID, threadNo: threadNo, postNo: post.no)
-            Button(isMarked ? "Unmark (You)" : "Mark as (You)") {
-                youManager.toggleYou(boardID: boardID, threadNo: threadNo, postNo: post.no, threadTitle: threadTitle, tim: threadTim)
+            Button {
+                youPostsManager.toggleYou(
+                    boardID: boardID,
+                    threadNo: threadNo,
+                    postNo: post.no,
+                    threadTitle: threadTitle,
+                    tim: opTim,
+                    knownReplies: replies
+                )
+            } label: {
+                let isYou = youPostsManager.isYou(boardID: boardID, threadNo: threadNo, postNo: post.no)
+                Label(isYou ? "Unmark (You)" : "Mark (You)", systemImage: isYou ? "person.fill.badge.minus" : "person.fill.badge.plus")
             }
         }
-        .padding(.vertical, 4 * settings.density.spacingMultiplier)
-        .background(isArchived ? Color(UIColor.systemGray5).opacity(0.06) : Color.clear)
-        .background(highlighted ? Color.yellow.opacity(0.15) : Color.clear)
-        .background(settings.highlightOP && isOP ? Color.blue.opacity(0.06) : Color.clear)
     }
 
+    // Local helper for saving images
     private func saveImageToPhotoLibrary(from url: URL?) {
         guard let url = url else { return }
         Task {
@@ -799,11 +921,44 @@ struct PostRowView: View {
         formatter.countStyle = .file
         return formatter.string(fromByteCount: Int64(size))
     }
+}
 
-    private func plainText(from raw: String?) -> String {
-        guard let raw = raw else { return "" }
-        let attr = attributedComment(raw)
-        return String(attr.characters)
+private struct ThreadSubjectHeader: View {
+    let title: String
+    let theme: BoardColors.Theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Subject")
+                .font(.caption2.weight(.semibold))
+                .foregroundColor(theme.text.opacity(0.6))
+            Text(title)
+                .font(.title3.weight(.semibold))
+                .foregroundColor(theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.surface)
+        .cornerRadius(12)
+        .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+        .listRowBackground(Color.clear)
+    }
+}
+
+private struct NewPostsDividerRow: View {
+    let accent: Color
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(accent).frame(height: 1)
+            Text("New Posts")
+                .font(.caption2.weight(.semibold))
+                .foregroundColor(accent)
+            Rectangle().fill(accent).frame(height: 1)
+        }
+        .padding(.vertical, 6)
+        .listRowBackground(Color.clear)
     }
 }
 
@@ -816,128 +971,5 @@ private func flagEmoji(for countryCode: String) -> String {
         }
     }
     return s
-}
-
-struct ReplyPreviewRow: View {
-    let boardID: String
-    let post: Thread
-    let attributedComment: (String) -> AttributedString
-    let onTap: () -> Void
-    @ObservedObject private var settings = AppSettings.shared
-    var body: some View {
-        Button(action: onTap) {
-            HStack(alignment: .top, spacing: 8) {
-                if let tim = post.tim {
-                    let thumbURL = URL(string: "https://i.4cdn.org/\(boardID)/\(tim)s.jpg")
-                    AsyncImage(url: thumbURL) { phase in
-                        if let image = phase.image {
-                            image.resizable().scaledToFill()
-                        } else {
-                            Color.gray.opacity(0.3)
-                        }
-                    }
-                    .frame(width: CGFloat(44) * settings.thumbnailScale, height: CGFloat(44) * settings.thumbnailScale)
-                    .cornerRadius(4)
-                    .clipped()
-                }
-                VStack(alignment: .leading, spacing: 4 * settings.density.spacingMultiplier) {
-                    HStack(spacing: 6) {
-                        Text("No. \(post.no.formatted(.number.grouping(.never)))")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text(Date(timeIntervalSince1970: TimeInterval(post.time)), style: .relative)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                    if let sub = post.sub {
-                        Text(sub)
-                            .font(.caption.bold())
-                            .lineLimit(nil)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .foregroundColor(.primary)
-                    }
-                    if let com = post.com {
-                        Text(attributedComment(com))
-                            .font(.caption)
-                            .lineLimit(nil)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(8)
-            .background(Color(UIColor.secondarySystemBackground))
-            .cornerRadius(8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-struct NewPostsDivider: View {
-    var body: some View {
-        ZStack(alignment: .leading) {
-            Rectangle().fill(Color.red).frame(height: 2)
-            Text("New posts")
-                .font(.caption.bold())
-                .foregroundColor(.red)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(Color.red.opacity(0.12))
-                .clipShape(Capsule())
-                .padding(.leading, 12)
-        }
-    }
-}
-
-final class ThreadReadState {
-    static let shared = ThreadReadState()
-    private let defaults = UserDefaults.standard
-    private let keyPrefix = "lastReadPost_" // key format: lastReadPost_/board/thread
-    private let keyTopPrefix = "lastTopPost_"
-    private let keyMaxPrefix = "lastMaxPost_"
-    private init() {}
-    private func key(boardID: String, threadNo: Int) -> String {
-        return "\(keyPrefix)\(boardID)/\(threadNo)"
-    }
-    private func topKey(boardID: String, threadNo: Int) -> String {
-        return "\(keyTopPrefix)\(boardID)/\(threadNo)"
-    }
-    private func maxKey(boardID: String, threadNo: Int) -> String {
-        return "\(keyMaxPrefix)\(boardID)/\(threadNo)"
-    }
-
-    func lastReadPostNo(boardID: String, threadNo: Int) -> Int? {
-        let k = key(boardID: boardID, threadNo: threadNo)
-        let v = defaults.integer(forKey: k)
-        return v == 0 ? nil : v
-    }
-
-    func setLastReadPostNo(boardID: String, threadNo: Int, postNo: Int) {
-        let k = key(boardID: boardID, threadNo: threadNo)
-        defaults.set(postNo, forKey: k)
-    }
-
-    func lastTopPostNo(boardID: String, threadNo: Int) -> Int? {
-        let k = topKey(boardID: boardID, threadNo: threadNo)
-        let v = defaults.integer(forKey: k)
-        return v == 0 ? nil : v
-    }
-    func setLastTopPostNo(boardID: String, threadNo: Int, postNo: Int) {
-        let k = topKey(boardID: boardID, threadNo: threadNo)
-        defaults.set(postNo, forKey: k)
-    }
-
-    func lastMaxPostNo(boardID: String, threadNo: Int) -> Int? {
-        let k = maxKey(boardID: boardID, threadNo: threadNo)
-        let v = defaults.integer(forKey: k)
-        return v == 0 ? nil : v
-    }
-
-    func setLastMaxPostNo(boardID: String, threadNo: Int, postNo: Int) {
-        let k = maxKey(boardID: boardID, threadNo: threadNo)
-        defaults.set(postNo, forKey: k)
-    }
 }
 

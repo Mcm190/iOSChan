@@ -3,15 +3,49 @@ import Combine
 import UserNotifications
 import UIKit
 
-private struct ThreadKey: Hashable { let boardID: String; let threadNo: Int }
+private struct ThreadKey: Hashable { let siteID: String; let boardID: String; let threadNo: Int }
 
 struct YouMark: Codable, Identifiable, Hashable {
-    var id: String { "\(boardID)-\(threadNo)-\(postNo)" }
+    var id: String { "\(siteID)-\(boardID)-\(threadNo)-\(postNo)" }
+    let siteID: String
     let boardID: String
     let threadNo: Int
     let postNo: Int
     var knownReplies: [Int] // store as array for Codable simplicity
     var unreadCount: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case siteID, boardID, threadNo, postNo, knownReplies, unreadCount
+    }
+
+    init(siteID: String, boardID: String, threadNo: Int, postNo: Int, knownReplies: [Int], unreadCount: Int) {
+        self.siteID = siteID
+        self.boardID = boardID
+        self.threadNo = threadNo
+        self.postNo = postNo
+        self.knownReplies = knownReplies
+        self.unreadCount = unreadCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.siteID = try container.decodeIfPresent(String.self, forKey: .siteID) ?? "4chan"
+        self.boardID = try container.decode(String.self, forKey: .boardID)
+        self.threadNo = try container.decode(Int.self, forKey: .threadNo)
+        self.postNo = try container.decode(Int.self, forKey: .postNo)
+        self.knownReplies = try container.decodeIfPresent([Int].self, forKey: .knownReplies) ?? []
+        self.unreadCount = try container.decodeIfPresent(Int.self, forKey: .unreadCount) ?? 0
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(siteID, forKey: .siteID)
+        try container.encode(boardID, forKey: .boardID)
+        try container.encode(threadNo, forKey: .threadNo)
+        try container.encode(postNo, forKey: .postNo)
+        try container.encode(knownReplies, forKey: .knownReplies)
+        try container.encode(unreadCount, forKey: .unreadCount)
+    }
 }
 
 final class YouPostsManager: ObservableObject {
@@ -29,40 +63,53 @@ final class YouPostsManager: ObservableObject {
 
     var totalUnread: Int { marks.reduce(0) { $0 + $1.unreadCount } }
 
-    func isYou(boardID: String, threadNo: Int, postNo: Int) -> Bool {
-        marks.contains { $0.boardID == boardID && $0.threadNo == threadNo && $0.postNo == postNo }
+    func marks(siteID: String = "4chan", boardID: String, threadNo: Int) -> [YouMark] {
+        marks.filter { $0.siteID == siteID && $0.boardID == boardID && $0.threadNo == threadNo }
     }
 
-    func markYou(boardID: String, threadNo: Int, postNo: Int, threadTitle: String?, tim: Int?) {
-        if !isYou(boardID: boardID, threadNo: threadNo, postNo: postNo) {
-            marks.append(YouMark(boardID: boardID, threadNo: threadNo, postNo: postNo, knownReplies: [], unreadCount: 0))
+    func isYouThread(siteID: String = "4chan", boardID: String, threadNo: Int) -> Bool {
+        marks.contains { $0.siteID == siteID && $0.boardID == boardID && $0.threadNo == threadNo }
+    }
+
+    func unreadForThread(siteID: String = "4chan", boardID: String, threadNo: Int) -> Int {
+        marks(siteID: siteID, boardID: boardID, threadNo: threadNo).reduce(0) { $0 + $1.unreadCount }
+    }
+
+    func isYou(siteID: String = "4chan", boardID: String, threadNo: Int, postNo: Int) -> Bool {
+        marks.contains { $0.siteID == siteID && $0.boardID == boardID && $0.threadNo == threadNo && $0.postNo == postNo }
+    }
+
+    func markYou(siteID: String = "4chan", boardID: String, threadNo: Int, postNo: Int, threadTitle: String?, tim: Int?, knownReplies: [Int] = []) {
+        if !isYou(siteID: siteID, boardID: boardID, threadNo: threadNo, postNo: postNo) {
+            let unique = Array(Set(knownReplies)).sorted()
+            marks.append(YouMark(siteID: siteID, boardID: boardID, threadNo: threadNo, postNo: postNo, knownReplies: unique, unreadCount: 0))
             save()
             ensureNotifications()
-            if !FavoritesManager.shared.isFavorite(boardID: boardID, threadNo: threadNo) {
+            if siteID == "4chan", !FavoritesManager.shared.isFavorite(boardID: boardID, threadNo: threadNo) {
                 let title = threadTitle ?? "Thread \(threadNo)"
                 FavoritesManager.shared.add(boardID: boardID, threadNo: threadNo, title: title, tim: tim)
             }
         }
     }
 
-    func unmarkYou(boardID: String, threadNo: Int, postNo: Int) {
-        marks.removeAll { $0.boardID == boardID && $0.threadNo == threadNo && $0.postNo == postNo }
+    func unmarkYou(siteID: String = "4chan", boardID: String, threadNo: Int, postNo: Int) {
+        marks.removeAll { $0.siteID == siteID && $0.boardID == boardID && $0.threadNo == threadNo && $0.postNo == postNo }
         save()
         updateBadge()
     }
 
-    func toggleYou(boardID: String, threadNo: Int, postNo: Int, threadTitle: String?, tim: Int?) {
-        if isYou(boardID: boardID, threadNo: threadNo, postNo: postNo) {
-            unmarkYou(boardID: boardID, threadNo: threadNo, postNo: postNo)
+    func toggleYou(siteID: String = "4chan", boardID: String, threadNo: Int, postNo: Int, threadTitle: String?, tim: Int?, knownReplies: [Int] = []) {
+        if isYou(siteID: siteID, boardID: boardID, threadNo: threadNo, postNo: postNo) {
+            unmarkYou(siteID: siteID, boardID: boardID, threadNo: threadNo, postNo: postNo)
         } else {
-            markYou(boardID: boardID, threadNo: threadNo, postNo: postNo, threadTitle: threadTitle, tim: tim)
+            markYou(siteID: siteID, boardID: boardID, threadNo: threadNo, postNo: postNo, threadTitle: threadTitle, tim: tim, knownReplies: knownReplies)
         }
     }
 
-    func clearUnreadForThread(boardID: String, threadNo: Int) {
+    func clearUnreadForThread(siteID: String = "4chan", boardID: String, threadNo: Int) {
         var changed = false
         for i in marks.indices {
-            if marks[i].boardID == boardID && marks[i].threadNo == threadNo {
+            if marks[i].siteID == siteID && marks[i].boardID == boardID && marks[i].threadNo == threadNo {
                 if marks[i].unreadCount != 0 { marks[i].unreadCount = 0; changed = true }
             }
         }
@@ -95,7 +142,8 @@ final class YouPostsManager: ObservableObject {
     }
 
     func checkForUpdates(completion: (() -> Void)?) {
-        let grouped = Dictionary(grouping: marks, by: { ThreadKey(boardID: $0.boardID, threadNo: $0.threadNo) })
+        let marksToScan = marks.filter { $0.siteID == "4chan" }
+        let grouped = Dictionary(grouping: marksToScan, by: { ThreadKey(siteID: $0.siteID, boardID: $0.boardID, threadNo: $0.threadNo) })
 
         guard !grouped.isEmpty else {
             completion?()
@@ -161,7 +209,7 @@ final class YouPostsManager: ObservableObject {
             var newTotal = 0
             var changed = false
             for i in self.marks.indices {
-                guard self.marks[i].boardID == boardID && self.marks[i].threadNo == threadNo else { continue }
+                guard self.marks[i].siteID == "4chan", self.marks[i].boardID == boardID && self.marks[i].threadNo == threadNo else { continue }
                 let youNo = self.marks[i].postNo
                 let known = Set(self.marks[i].knownReplies)
                 var newlyFound: [Int] = []
@@ -230,7 +278,11 @@ var customSoundName: String? {
 
     private func updateBadge() {
         DispatchQueue.main.async {
-            UIApplication.shared.applicationIconBadgeNumber = self.totalUnread
+            if #available(iOS 17.0, *) {
+                UNUserNotificationCenter.current().setBadgeCount(self.totalUnread) { _ in }
+            } else {
+                UIApplication.shared.applicationIconBadgeNumber = self.totalUnread
+            }
         }
     }
 
@@ -263,4 +315,3 @@ final class NotificationCenterDelegate: NSObject, UNUserNotificationCenterDelega
         completionHandler()
     }
 }
-

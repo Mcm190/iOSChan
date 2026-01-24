@@ -10,6 +10,13 @@ struct GlobalSearchView: View {
     @State private var boards: [Board] = []
     @State private var selectedBoards: Set<String> = []
 
+    actor _SearchAccumulator {
+        var items: [SearchResult] = []
+        func append(contentsOf new: [SearchResult]) {
+            items.append(contentsOf: new)
+        }
+    }
+
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
@@ -122,7 +129,7 @@ struct GlobalSearchView: View {
 
         let boardsToSearch = Array(selectedBoards)
         var tempResults: [SearchResult] = []
-        let lock = NSLock()
+        let accumulator = _SearchAccumulator()
 
         await withTaskGroup(of: Void.self) { group in
             for b in boardsToSearch {
@@ -130,13 +137,12 @@ struct GlobalSearchView: View {
                     do {
                         let threads = try await (searchArchived ? fetchArchivedOPs(boardID: b) : fetchCatalog(boardID: b))
                         let filtered = threads.filter { t in
-                            let sub = t.sub.flatMap(cleanHTML) ?? ""
-                            let com = t.com.flatMap(cleanHTML) ?? ""
+                            let sub = t.sub.map(cleanHTML) ?? ""
+                            let com = t.com.map(cleanHTML) ?? ""
                             return sub.localizedCaseInsensitiveContains(q) || com.localizedCaseInsensitiveContains(q)
                         }
-                        lock.lock()
-                        tempResults.append(contentsOf: filtered.map { SearchResult(boardID: b, threadNo: $0.no, subject: $0.sub.flatMap(cleanHTML), snippet: ($0.com.flatMap(cleanHTML) ?? "").prefix(160).description) })
-                        lock.unlock()
+                        let mapped = filtered.map { SearchResult(boardID: b, threadNo: $0.no, subject: $0.sub.map(cleanHTML), snippet: ($0.com.map(cleanHTML) ?? "").prefix(160).description) }
+                        await accumulator.append(contentsOf: mapped)
                         await MainActor.run { progressText = "Searched /\(b)/ (\(filtered.count) matches)" }
                     } catch {
                         await MainActor.run { progressText = "Failed /\(b)/" }
@@ -144,9 +150,9 @@ struct GlobalSearchView: View {
                 }
             }
         }
-
+        let final = await accumulator.items
         await MainActor.run {
-            results = tempResults.sorted(by: { lhs, rhs in
+            results = final.sorted(by: { lhs, rhs in
                 if lhs.boardID == rhs.boardID { return lhs.threadNo > rhs.threadNo }
                 return lhs.boardID < rhs.boardID
             })

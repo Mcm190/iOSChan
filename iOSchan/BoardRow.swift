@@ -1,40 +1,32 @@
-//
-//  BoardRow.swift
-//  iOSchan
-//
-//  Created by MCM on 20/12/2025.
-//
-
 import SwiftUI
 
 struct BoardRow: View {
     let board: Board
     let isFavorite: Bool
     let toggleFavorite: () -> Void
-
-    private var isSFW: Bool { (board.ws_board ?? 1) == 1 }
-    private var rowTint: Color { isSFW ? .chanSFW : .chanNSFW }
+    private var theme: BoardColors.Theme { BoardColors.theme(for: board) }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             ZStack {
                 Circle()
-                    .fill(Color.blue.opacity(0.1))
-                    .frame(width: 50, height: 50)
+                    .fill(theme.card)
+                    .frame(width: 48, height: 48)
+                    .shadow(color: theme.text.opacity(0.08), radius: 2, x: 0, y: 1)
 
                 Text("/\(board.board)/")
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
-                    .foregroundColor(.blue)
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundColor(theme.text)
             }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(board.title)
-                    .font(.headline)
-                    .foregroundColor(.primary)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(theme.text)
 
                 Text(cleanHTML(board.meta_description ?? ""))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 13))
+                    .foregroundColor(theme.text.opacity(0.6))
                     .lineLimit(2)
             }
 
@@ -42,14 +34,12 @@ struct BoardRow: View {
 
             Button(action: toggleFavorite) {
                 Image(systemName: isFavorite ? "star.fill" : "star")
-                    .foregroundColor(isFavorite ? .yellow : .gray)
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundColor(isFavorite ? .yellow : theme.text.opacity(0.3))
             }
             .buttonStyle(.borderless)
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 4)
-        .background(rowTint.opacity(0.25))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.vertical, 8)
     }
 
     func cleanHTML(_ text: String) -> String {
